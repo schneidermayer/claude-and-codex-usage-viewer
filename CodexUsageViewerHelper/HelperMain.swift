@@ -22,10 +22,19 @@ final class BackgroundHelperService: NSObject, BackgroundHelperProtocol {
             case .refresh: requestRefresh()
             case .connect(let accountID): await store.connect(accountID)
             case .cancelLogin: await store.cancelLogin()
+            case .submitLoginCode(let accountID, let loginID, let code):
+                await store.submitLoginCode(code, accountID: accountID, loginID: loginID)
             case .disconnect(let accountID): await store.disconnect(accountID)
+            case .addAccount(let provider): await store.addAccount(provider: provider)
+            case .removeAccount(let accountID): await store.removeAccount(accountID)
+            case .setProvider(let accountID, let provider): await store.setProvider(provider, for: accountID)
             case .setExecutable(let path):
                 guard path.utf8.count <= 4_096 else { reply(Data()); return }
                 store.codexPath = path
+                requestRefresh()
+            case .setClaudeExecutable(let path):
+                guard path.utf8.count <= 4_096 else { reply(Data()); return }
+                store.claudePath = path
                 requestRefresh()
             }
             reply((try? JSONEncoder().encode(store.backgroundState)) ?? Data())
@@ -73,7 +82,7 @@ enum CodexUsageViewerHelperMain {
         guard proc_pidpath(getpid(), &executablePath, UInt32(executablePath.count)) > 0 else { exit(EXIT_FAILURE) }
         let helperURL = URL(fileURLWithPath: String(cString: executablePath))
         CodexConnection.workerLauncherURL = helperURL
-        let widgetReloader = WidgetReloadProcess(executable: helperURL.deletingLastPathComponent().appendingPathComponent("Codex Usage Viewer"))
+        let widgetReloader = WidgetReloadProcess(executable: helperURL.deletingLastPathComponent().appendingPathComponent("Claude and Codex Usage Viewer"))
         var dependencies = CodexUsageViewerStoreDependencies.live
         dependencies.reloadWidgets = { widgetReloader.reload() }
         let preferences = UserDefaults(suiteName: BackgroundServiceConstants.appIdentifier)!

@@ -68,7 +68,8 @@ struct RenderWidgets {
         Small: 170 × 170 pt; Large: 360 × 170 pt. Light and dark appearances.
 
         Covers weekly quota slots, disconnected/stale/expired accounts, missing data, long names,
-        local-account icons, subscription tiers/fallbacks, and zero/unknown/unlimited/expired resources.
+        local-account icons, subscription tiers/fallbacks, zero/unknown/unlimited/expired resources,
+        and one, two, or three accounts mixing Claude and Codex.
         """
         try readme.write(to: output.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
         print("Rendered \(fixtures.count * families.count * 2) content snapshots in \(output.path)")
@@ -151,9 +152,31 @@ struct RenderWidgets {
             columnExtremes.accounts[index].resetCredits = RateLimitResetCredits(availableCount: Int.max)
             columnExtremes.accounts[index].buckets[0].primary?.resetsAt = Int(now.timeIntervalSince1970) + [59, 86_340, 604_740][index]
         }
+        var singleClaude = connected
+        singleClaude.accounts = [connected.accounts[1]]
+        singleClaude.accounts[0].provider = .claude
+        singleClaude.accounts[0].plan = "Pro"
+        singleClaude.accounts[0].buckets[0].limitId = "claude"
+        singleClaude.accounts[0].buckets[0].credits = nil
+        singleClaude.accounts[0].resetCredits = nil
+        var twoAccounts = connected
+        twoAccounts.accounts = Array(connected.accounts.prefix(2))
+        twoAccounts.accounts[1] = singleClaude.accounts[0]
+        var allClaude = connected
+        for index in allClaude.accounts.indices {
+            allClaude.accounts[index].provider = .claude
+            allClaude.accounts[index].plan = ["Pro", "Max", "Team"][index]
+            allClaude.accounts[index].buckets[0].limitId = "claude"
+            allClaude.accounts[index].buckets[0].credits = nil
+            allClaude.accounts[index].resetCredits = nil
+        }
         return [
             ("connected", connected),
-            ("empty", UsageSnapshot(accounts: AccountSnapshot.emptyAccounts, savedAt: now)),
+            ("one-claude", singleClaude),
+            ("two-mixed", twoAccounts),
+            ("three-claude", allClaude),
+            ("empty", UsageSnapshot(accounts: [AccountSnapshot.emptyAccounts[0]], savedAt: now)),
+            ("three-empty", UsageSnapshot(accounts: AccountSnapshot.emptyAccounts, savedAt: now)),
             ("attention", attention),
             ("local-match", localMatch),
             ("subscription-tiers", tiers),

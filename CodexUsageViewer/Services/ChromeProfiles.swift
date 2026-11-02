@@ -41,7 +41,8 @@ struct ChromeProfile: Identifiable, Equatable, Sendable {
         guard isValidDirectory(profileID), discover().contains(where: { $0.id == profileID }) else {
             throw ChromeProfileError.invalidProfile
         }
-        guard CodexConnection.validatedLoginURL(url.absoluteString) != nil else { throw ChromeProfileError.invalidURL }
+        guard CodexConnection.validatedLoginURL(url.absoluteString) != nil
+                || ClaudeConnection.validatedLoginURL(url.absoluteString) != nil else { throw ChromeProfileError.invalidURL }
         guard let application = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome") else {
             throw ChromeProfileError.notInstalled
         }

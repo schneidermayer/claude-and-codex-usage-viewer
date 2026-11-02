@@ -11,16 +11,14 @@ struct CodexUsageViewerWidgetContent: View {
 
     private var isSmall: Bool { (family ?? environmentFamily) == .systemSmall }
     private var accounts: [AccountSnapshot] {
-        CodexUsageViewerConstants.accountIDs.enumerated().map { index, id in
-            snapshot.accounts.first(where: { $0.id == id })
-                ?? AccountSnapshot(id: id, name: "Account \(index + 1)")
-        }
+        Array(snapshot.accounts.prefix(3))
     }
 
     var body: some View {
         GeometryReader { geometry in
             let spacing: CGFloat = isSmall ? 4 : 12
-            let columnWidth = max(0, (geometry.size.width - 2 * spacing) / 3)
+            let count = max(1, accounts.count)
+            let columnWidth = max(0, (geometry.size.width - CGFloat(count - 1) * spacing) / CGFloat(count))
             HStack(spacing: spacing) {
                 ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
                     Group {
@@ -39,11 +37,11 @@ struct CodexUsageViewerWidgetContent: View {
         }
         .fontDesign(.rounded)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Codex weekly usage, credits, available resets, and time until reset")
+        .accessibilityLabel("Claude and Codex weekly usage and time until reset")
     }
 
     private func accountColumn(_ account: AccountSnapshot, index: Int) -> some View {
-        let color = accent(index)
+        let color = accent(CodexUsageViewerPalette.index(for: account.id))
         let state = account.weeklyUsage(at: referenceDate)
         let reset = state.window.flatMap { WeeklyResetProgress(window: $0, at: referenceDate) }
         return VStack(spacing: 0) {
@@ -63,6 +61,11 @@ struct CodexUsageViewerWidgetContent: View {
                     .help(account.displayName)
             }
             .frame(height: 16)
+
+            Text(account.provider.displayName)
+                .font(.system(size: isSmall ? 8 : 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(height: 11)
 
             HStack(alignment: .firstTextBaseline, spacing: 0) {
                 Text(state.window.map { String($0.remainingPercent) } ?? "—")
@@ -123,7 +126,10 @@ struct CodexUsageViewerWidgetContent: View {
 
             Spacer(minLength: 5)
 
-            if isSmall {
+            if account.provider != .codex {
+                Color.clear.frame(height: isSmall ? 25 : 17)
+                    .accessibilityHidden(true)
+            } else if isSmall {
                 VStack(spacing: 3) {
                     credits(account)
                     availableResets(account)

@@ -9,6 +9,8 @@ struct PendingLogin: Identifiable, Codable, Sendable {
     var authURL: URL?
     var isWaiting: Bool
     var error: String?
+    var attemptID: String? = nil
+    var isSubmittingCode = false
 }
 
 @MainActor
@@ -22,6 +24,10 @@ struct CodexUsageViewerStoreDependencies {
     var discoverChromeProfiles: () -> [ChromeProfile]
     var now: () -> Date
     var readLocalIdentity: (URL) async throws -> CodexIdentity?
+    var locateClaudeExecutable: (String?) -> URL? = { ClaudeConnection.locateExecutable(override: $0) }
+    var makeClaudeConnection: (String, URL) -> any CodexAccountConnection = { ClaudeConnection(accountID: $0, executableURL: $1) }
+    var claudeCredentialExists: (String) -> Bool = { ClaudeConnection.credentialExists(accountID: $0) }
+    var removeCredentials: (String, AccountProvider) async throws -> Void = { _, _ in }
 
     static var live: Self {
         Self(loadSnapshot: SharedSnapshotStore.load, saveSnapshot: SharedSnapshotStore.save,
@@ -34,7 +40,13 @@ struct CodexUsageViewerStoreDependencies {
                      .appendingPathComponent("Library/Application Support/CodexUsageViewer/Accounts")
                  return FileManager.default.fileExists(atPath: root.appendingPathComponent(id).appendingPathComponent("auth.json").path)
              }, discoverChromeProfiles: ChromeProfile.discover, now: Date.init,
-             readLocalIdentity: { try await CodexConnection.readLocalIdentity(executableURL: $0) })
+             readLocalIdentity: { try await CodexConnection.readLocalIdentity(executableURL: $0) },
+             removeCredentials: { id, provider in
+                 // stop() terminates workers and escalates after one second. Let them exit before deleting sign-ins.
+                 try await Task.sleep(for: .milliseconds(1_200))
+                 if provider == .codex { try CodexConnection.removeCredentials(accountID: id) }
+                 else { try ClaudeConnection.removeCredentials(accountID: id) }
+             })
     }
 }
 
@@ -60,8 +72,7 @@ final class CodexUsageViewerStore: ObservableObject {
                 Task { await sendToBackground(.setExecutable(path: path)) }
                 return
             }
-            for connection in connections.values { connection.stop() }
-            connections.removeAll()
+            stopConnections(provider: .codex)
             availableCodex = dependencies.locateExecutable(codexPath) != nil
             localCodexEmail = nil
             localCodexCheckedAt = nil
@@ -69,7 +80,21 @@ final class CodexUsageViewerStore: ObservableObject {
             localLookupID = UUID()
         }
     }
+    @Published var claudePath: String {
+        didSet {
+            guard !applyingBackgroundState else { return }
+            preferences.set(claudePath, forKey: "claudeExecutable")
+            if background != nil {
+                let path = claudePath
+                Task { await sendToBackground(.setClaudeExecutable(path: path)) }
+                return
+            }
+            stopConnections(provider: .claude)
+            availableClaude = dependencies.locateClaudeExecutable(claudePath) != nil
+        }
+    }
     @Published private(set) var availableCodex: Bool
+    @Published private(set) var availableClaude: Bool
     @Published private(set) var chromeProfiles: [ChromeProfile]
     @Published private(set) var busyAccountIDs: Set<String> = []
     var openDashboardAction: (() -> Void)?
@@ -90,6 +115,7 @@ final class CodexUsageViewerStore: ObservableObject {
     private var activeLoginID: String?
     private var loginAttemptID: UUID?
     private var pendingDisconnectIDs: Set<String> = []
+    private var isChangingAccounts = false
     private var profileSelections: [String: String]
     private var localLookupID = UUID()
 
@@ -136,7 +162,10 @@ final class CodexUsageViewerStore: ObservableObject {
 
     convenience init() {
         let testing = ProcessInfo.processInfo.arguments.contains("--ui-testing")
-        self.init(dependencies: .live, preferences: .standard, startsPolling: true,
+        let testSuite = "com.inndevs.codexusageviewer.uitesting"
+        let preferences = testing ? UserDefaults(suiteName: testSuite)! : .standard
+        if testing { preferences.removePersistentDomain(forName: testSuite) }
+        self.init(dependencies: .live, preferences: preferences, startsPolling: true,
                   arguments: ProcessInfo.processInfo.arguments,
                   background: testing ? nil : BackgroundClient(), managesBackgroundService: !testing)
     }
@@ -159,12 +188,18 @@ final class CodexUsageViewerStore: ObservableObject {
         let path = preferences.string(forKey: "codexExecutable") ?? ""
         codexPath = path
         availableCodex = dependencies.locateExecutable(path) != nil
-        let cachedSnapshot = isUITesting ? UsageSnapshot.empty : dependencies.loadSnapshot()
+        let claudeExecutable = preferences.string(forKey: "claudeExecutable") ?? ""
+        claudePath = claudeExecutable
+        availableClaude = dependencies.locateClaudeExecutable(claudeExecutable) != nil
+        let cachedSnapshot = isUITesting ? UsageSnapshot.empty : SharedSnapshotStore.normalized(dependencies.loadSnapshot())
         var cached = cachedSnapshot.accounts
         if !isUITesting {
             // Check app-owned credential existence, without reading tokens.
             for index in cached.indices where cached[index].state == .disconnected {
-                if dependencies.credentialExists(cached[index].id) {
+                let exists = cached[index].provider == .codex
+                    ? dependencies.credentialExists(cached[index].id)
+                    : dependencies.claudeCredentialExists(cached[index].id)
+                if exists {
                     cached[index].state = .needsSignIn
                 }
             }
@@ -183,6 +218,13 @@ final class CodexUsageViewerStore: ObservableObject {
             isDemo = false
             localCodexEmail = accounts.first?.email
             localCodexCheckedAt = dependencies.now()
+        }
+        if isUITesting && arguments.contains("--ui-testing-login-code") {
+            accounts = [AccountSnapshot(id: "account-1", name: "Account", provider: .claude)]
+            liveAccounts = accounts
+            login = PendingLogin(id: "account-1", accountName: "Account 1",
+                                 authURL: URL(string: "https://claude.com/cai/oauth/authorize?state=fixture"),
+                                 isWaiting: true, attemptID: "fixture-attempt")
         }
         updateLocalCodexMatchStatus()
         if startsPolling && !isUITesting {
@@ -205,22 +247,78 @@ final class CodexUsageViewerStore: ObservableObject {
     private func connection(for id: String) throws -> any CodexAccountConnection {
         if let connection = connections[id] { return connection }
         guard CodexUsageViewerConstants.accountIDs.contains(id),
-              let executable = dependencies.locateExecutable(codexPath) else {
-            throw NSError(domain: "CodexUsageViewer", code: 2, userInfo: [NSLocalizedDescriptionKey: "Codex CLI wasn’t found. Choose its executable in Settings, then try again."])
+              let account = accounts.first(where: { $0.id == id }) else { throw CodexConnectionError.invalidAccount }
+        let executable = account.provider == .codex
+            ? dependencies.locateExecutable(codexPath) : dependencies.locateClaudeExecutable(claudePath)
+        guard let executable else {
+            throw NSError(domain: "CodexUsageViewer", code: 2, userInfo: [NSLocalizedDescriptionKey: "\(account.provider.displayName) CLI wasn’t found. Choose its executable in Settings, then try again."])
         }
-        let connection = dependencies.makeConnection(id, executable)
+        let connection = account.provider == .codex
+            ? dependencies.makeConnection(id, executable) : dependencies.makeClaudeConnection(id, executable)
         connections[id] = connection
         return connection
     }
 
+    private func stopConnections(provider: AccountProvider) {
+        for account in accounts where account.provider == provider {
+            connections.removeValue(forKey: account.id)?.stop()
+        }
+    }
+
+    var canManageAccounts: Bool {
+        !stopped && !isDemo && !isRefreshing && !isChangingAccounts && login == nil && loginTask == nil
+            && busyAccountIDs.isEmpty && pendingDisconnectIDs.isEmpty
+    }
+    var canAddAccount: Bool { canManageAccounts && accounts.count < 3 }
+    var canRemoveAccount: Bool { canManageAccounts && accounts.count > 1 }
+
+    func addAccount(provider: AccountProvider) async {
+        guard canAddAccount else { return }
+        if background != nil { await sendToBackground(.addAccount(provider: provider)); return }
+        guard let id = CodexUsageViewerConstants.accountIDs.first(where: { id in !accounts.contains { $0.id == id } }) else { return }
+        accounts.append(AccountSnapshot(id: id, name: "Account", provider: provider))
+        persist()
+    }
+
+    func setProvider(_ provider: AccountProvider, for id: String) async {
+        guard canManageAccounts, let index = accounts.firstIndex(where: { $0.id == id }),
+              accounts[index].state == .disconnected, accounts[index].provider != provider else { return }
+        if background != nil { await sendToBackground(.setProvider(accountID: id, provider: provider)); return }
+        connections.removeValue(forKey: id)?.stop()
+        accounts[index] = AccountSnapshot(id: id, name: accounts[index].name, provider: provider)
+        profileSelections.removeValue(forKey: id)
+        if managesChromeProfiles { preferences.set(profileSelections, forKey: "chromeProfiles") }
+        persist()
+    }
+
+    func removeAccount(_ id: String) async {
+        guard canRemoveAccount, let account = accounts.first(where: { $0.id == id }) else { return }
+        if background != nil { await sendToBackground(.removeAccount(accountID: id)); return }
+        isChangingAccounts = true
+        pendingDisconnectIDs.insert(id)
+        busyAccountIDs.insert(id)
+        defer { pendingDisconnectIDs.remove(id); busyAccountIDs.remove(id); isChangingAccounts = false }
+        connections.removeValue(forKey: id)?.stop()
+        do {
+            if !isUITesting { try await dependencies.removeCredentials(id, account.provider) }
+            guard !stopped else { return }
+            accounts.removeAll { $0.id == id }
+            profileSelections.removeValue(forKey: id)
+            if managesChromeProfiles { preferences.set(profileSelections, forKey: "chromeProfiles") }
+            updateLocalCodexMatchStatus()
+            persist()
+        } catch { errorMessage = "Couldn’t remove account: \(error.localizedDescription)" }
+    }
+
     func refresh() async {
-        guard !isDemo, !isUITesting, !isRefreshing else { return }
+        guard !stopped, !isDemo, !isUITesting, !isRefreshing, !isChangingAccounts else { return }
         if background != nil { await sendToBackground(.refresh); return }
         availableCodex = dependencies.locateExecutable(codexPath) != nil
+        availableClaude = dependencies.locateClaudeExecutable(claudePath) != nil
         isRefreshing = true
         defer { isRefreshing = false }
         async let localRefresh: Void = refreshLocalCodexIdentity()
-        for id in CodexUsageViewerConstants.accountIDs {
+        for id in accounts.map(\.id) {
             guard let account = accounts.first(where: { $0.id == id }),
                   account.state != .disconnected, login?.id != id else { continue }
             await refreshAccount(id)
@@ -285,7 +383,7 @@ final class CodexUsageViewerStore: ObservableObject {
         defer { busyAccountIDs.remove(id) }
         do {
             let worker = try connection(for: id)
-            guard let identity = try await worker.account(), identity.type == "chatgpt" else {
+            guard let identity = try await worker.account(), identity.type == accounts[index].provider.identityType else {
                 accounts[index].state = .needsSignIn
                 accounts[index].buckets = []
                 accounts[index].resetCredits = nil
@@ -309,12 +407,19 @@ final class CodexUsageViewerStore: ObservableObject {
             accounts[index].issue = nil
         } catch {
             accounts[index].issue = error.localizedDescription
-            // Preserve the last successful snapshot on failure.
+            if let claudeError = error as? ClaudeConnectionError,
+               claudeError == .signInRequired || claudeError == .subscriptionRequired {
+                accounts[index].state = .needsSignIn
+                accounts[index].buckets = []
+                accounts[index].resetCredits = nil
+                accounts[index].updatedAt = nil
+            }
+            // Transient failures preserve the last successful snapshot with its original age.
         }
     }
 
     func connect(_ accountID: String) async {
-        guard !isDemo, !isUITesting, login == nil, loginTask == nil, !busyAccountIDs.contains(accountID), !pendingDisconnectIDs.contains(accountID), let account = accounts.first(where: { $0.id == accountID }) else { return }
+        guard !stopped, !isChangingAccounts, !isDemo, !isUITesting, login == nil, loginTask == nil, !busyAccountIDs.contains(accountID), !pendingDisconnectIDs.contains(accountID), let account = accounts.first(where: { $0.id == accountID }) else { return }
         if managesChromeProfiles {
             chromeProfiles = dependencies.discoverChromeProfiles()
             profileSelections = profileSelections.filter { _, profileID in chromeProfiles.contains(where: { $0.id == profileID }) }
@@ -335,11 +440,12 @@ final class CodexUsageViewerStore: ObservableObject {
                     return
                 }
                 activeLoginID = result.loginId
+                login?.attemptID = result.loginId
                 login?.authURL = result.authURL
                 try await worker.waitForLogin(loginID: result.loginId)
                 guard !Task.isCancelled, loginAttemptID == attempt else { return }
                 if let index = accounts.firstIndex(where: { $0.id == accountID }) {
-                    accounts[index] = AccountSnapshot(id: accountID, name: accounts[index].name, state: .needsSignIn)
+                    accounts[index] = AccountSnapshot(id: accountID, name: accounts[index].name, state: .needsSignIn, provider: accounts[index].provider)
                 }
                 await refreshAccount(accountID)
                 await refreshLocalCodexIdentity()
@@ -348,14 +454,50 @@ final class CodexUsageViewerStore: ObservableObject {
                     login = nil
                     activeLoginID = nil
                 } else {
+                    login?.isSubmittingCode = false
                     login?.isWaiting = false
                     login?.error = accounts.first(where: { $0.id == accountID })?.issue ?? "Sign-in finished, but usage could not be read. Close this window and refresh to try again."
                 }
             } catch {
                 guard !Task.isCancelled, loginAttemptID == attempt else { return }
+                login?.isSubmittingCode = false
                 login?.isWaiting = false
                 login?.error = error.localizedDescription
             }
+        }
+    }
+
+    /// Codes cross the authenticated app/helper channel only; they are never stored in state or snapshots.
+    func submitLoginCode(_ code: String, accountID: String? = nil, loginID: String? = nil) async {
+        guard !stopped, !isDemo, let pending = login, pending.isWaiting, !pending.isSubmittingCode,
+              let attempt = pending.attemptID,
+              accountID == nil || accountID == pending.id,
+              loginID == nil || loginID == attempt,
+              accounts.first(where: { $0.id == pending.id })?.provider == .claude else { return }
+        guard !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, code.utf8.count <= 8_192 else {
+            login?.error = "Paste the complete authentication code from Claude."
+            return
+        }
+        login?.isSubmittingCode = true
+        login?.error = nil
+        if isUITesting {
+            login = nil
+            return
+        }
+        if background != nil {
+            await sendToBackground(.submitLoginCode(accountID: pending.id, loginID: attempt, code: code))
+            return
+        }
+        do {
+            guard activeLoginID == attempt, let worker = connections[pending.id] else { throw ClaudeConnectionError.stopped }
+            try await worker.submitLoginCode(code: code, loginID: attempt)
+            // Keep submission disabled until the original login task finishes exchanging the code.
+        } catch {
+            guard login?.id == pending.id, login?.attemptID == attempt else { return }
+            login?.isSubmittingCode = false
+            // The CLI's raw diagnostics may include credentials; only known safe errors reach the UI.
+            login?.error = (error as? ClaudeConnectionError)?.localizedDescription
+                ?? "Claude couldn’t accept this authentication code. Start sign-in again."
         }
     }
 
@@ -391,7 +533,7 @@ final class CodexUsageViewerStore: ObservableObject {
     }
 
     func disconnect(_ accountID: String) async {
-        guard !isDemo, !isUITesting, let index = accounts.firstIndex(where: { $0.id == accountID }), !pendingDisconnectIDs.contains(accountID) else { return }
+        guard !stopped, !isChangingAccounts, !isDemo, !isUITesting, let index = accounts.firstIndex(where: { $0.id == accountID }), !pendingDisconnectIDs.contains(accountID) else { return }
         if background != nil { await sendToBackground(.disconnect(accountID: accountID)); return }
         pendingDisconnectIDs.insert(accountID)
         var ownsBusyState = false
@@ -411,7 +553,7 @@ final class CodexUsageViewerStore: ObservableObject {
             try await worker.disconnect()
             worker.stop()
             connections.removeValue(forKey: accountID)
-            accounts[index] = AccountSnapshot(id: accountID, name: accounts[index].name)
+            accounts[index] = AccountSnapshot(id: accountID, name: accounts[index].name, provider: accounts[index].provider)
             updateLocalCodexMatchStatus()
             persist()
         } catch { errorMessage = "Couldn’t disconnect: \(error.localizedDescription)" }
@@ -470,9 +612,11 @@ final class CodexUsageViewerStore: ObservableObject {
             busyAccountIDs = Set(state.busyAccountIDs)
             login = state.login
             availableCodex = state.availableCodex
+            availableClaude = state.availableClaude
             errorMessage = state.errorMessage
             applyingBackgroundState = true
             codexPath = state.codexPath
+            claudePath = state.claudePath
             applyingBackgroundState = false
             backgroundStatus = "Active · updates continue after you quit the app."
             backgroundNeedsApproval = false
@@ -499,7 +643,8 @@ final class CodexUsageViewerStore: ObservableObject {
         return BackgroundState(snapshot: snapshot, isRefreshing: isRefreshing,
                                busyAccountIDs: Array(busyAccountIDs), login: login,
                                availableCodex: availableCodex, localCodexStatus: localCodexStatus,
-                               errorMessage: errorMessage, codexPath: codexPath)
+                               errorMessage: errorMessage, codexPath: codexPath,
+                               availableClaude: availableClaude, claudePath: claudePath)
     }
 
     private func persist() {

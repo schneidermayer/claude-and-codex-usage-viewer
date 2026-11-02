@@ -60,7 +60,7 @@ private func usageConfiguration(size: CodexUsageViewerWidgetSize) -> some Widget
             .widgetURL(URL(string: "codexusageviewer://dashboard"))
     }
     .configurationDisplayName(size.name)
-    .description("Weekly usage, credits, available resets, and reset countdowns for your three Codex accounts.")
+    .description("Weekly usage and reset countdowns for one to three Claude or Codex accounts, with Codex credits and earned resets.")
     .supportedFamilies([size.family])
 }
 

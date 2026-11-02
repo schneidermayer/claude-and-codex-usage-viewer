@@ -5,6 +5,7 @@ struct DashboardView: View {
     @ObservedObject var store: CodexUsageViewerStore
     @Environment(\.colorScheme) private var colorScheme
     @State private var disconnecting: AccountSnapshot?
+    @State private var removing: AccountSnapshot?
     @State private var inspectingLimits: AccountSnapshot?
     @State private var showsSettings = false
 
@@ -53,7 +54,20 @@ struct DashboardView: View {
                 disconnecting = nil
             }
         } message: {
-            Text("This removes this account’s connection from Codex Usage Viewer. You can sign in again at any time.")
+            Text("This removes this account’s connection from Claude and Codex Usage Viewer. You can sign in again at any time.")
+        }
+        .confirmationDialog(
+            "Remove \(removing?.displayName ?? "account")?",
+            isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Remove account", role: .destructive) {
+                guard let account = removing else { return }
+                Task { await store.removeAccount(account.id) }
+                removing = nil
+            }
+        } message: {
+            Text("This signs out this account and removes its card and widget column. Your other accounts stay connected.")
         }
     }
 
@@ -73,7 +87,7 @@ struct DashboardView: View {
             HStack(spacing: 12) {
                 CodexUsageViewerMark(size: 39)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Codex Usage Viewer")
+                    Text("Claude and Codex Usage Viewer")
                         .font(.system(size: 22, weight: .semibold, design: .rounded))
                         .tracking(-0.6)
                         .accessibilityIdentifier("codexusageviewer.title")
@@ -85,7 +99,7 @@ struct DashboardView: View {
                             Circle()
                                 .fill(connectedCount > 0 ? CodexUsageViewerPalette.mint : Color.secondary.opacity(0.5))
                                 .frame(width: 4, height: 4)
-                            Text(store.isDemo ? "Sample accounts" : "\(connectedCount) of 3 connected")
+                            Text(store.isDemo ? "Sample accounts" : "\(connectedCount) of \(store.accounts.count) connected")
                         }
                     }
                     .font(.system(size: 10, weight: .medium))
@@ -126,7 +140,7 @@ struct DashboardView: View {
                         Image(systemName: "slider.horizontal.3").frame(width: 17)
                     }
                     .buttonStyle(.glass)
-                    .accessibilityLabel("Codex Usage Viewer settings")
+                    .accessibilityLabel("Claude and Codex Usage Viewer settings")
                     .accessibilityIdentifier("codexusageviewer.settings")
                     .help("Settings")
                 }
@@ -136,17 +150,38 @@ struct DashboardView: View {
     }
 
     private var accountSection: some View {
-        HStack(alignment: .top, spacing: 16) {
-            ForEach(store.accounts) { account in
-                AccountCard(
-                    account: account,
-                    isDemo: store.isDemo,
-                    isLocalAccount: { store.isLocalAccount(account) },
-                    connect: { Task { await store.connect(account.id) } },
-                    showLimits: { inspectingLimits = account },
-                    disconnect: { disconnecting = account }
-                )
-                .frame(maxWidth: .infinity)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("\(store.accounts.count) of 3 accounts")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    Button("Add Claude account") { Task { await store.addAccount(provider: .claude) } }
+                    Button("Add Codex account") { Task { await store.addAccount(provider: .codex) } }
+                } label: {
+                    Label("Add account", systemImage: "plus")
+                }
+                .buttonStyle(.glass)
+                .disabled(!store.canAddAccount)
+                .accessibilityIdentifier("codexusageviewer.addAccount")
+            }
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(store.accounts) { account in
+                    AccountCard(
+                        account: account,
+                        isDemo: store.isDemo,
+                        canManage: store.canManageAccounts,
+                        canRemove: store.canRemoveAccount,
+                        isLocalAccount: { store.isLocalAccount(account) },
+                        connect: { Task { await store.connect(account.id) } },
+                        showLimits: { inspectingLimits = account },
+                        disconnect: { disconnecting = account },
+                        remove: { removing = account },
+                        setProvider: { provider in Task { await store.setProvider(provider, for: account.id) } }
+                    )
+                    .frame(maxWidth: .infinity)
+                }
             }
         }
     }
@@ -175,7 +210,7 @@ struct DashboardView: View {
             HStack(alignment: .top, spacing: 18) {
                 Label(connectedCount == 0
                       ? "Connect each account using its matching Chrome profile."
-                      : "Add a widget: control-click your desktop → Edit Widgets → Codex Usage Viewer.",
+                      : "Add a widget: control-click your desktop → Edit Widgets → Claude and Codex Usage Viewer.",
                       systemImage: connectedCount == 0 ? "person.crop.rectangle.stack" : "rectangle.on.rectangle")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -212,10 +247,14 @@ struct DashboardView: View {
 private struct AccountCard: View {
     var account: AccountSnapshot
     var isDemo: Bool
+    var canManage: Bool
+    var canRemove: Bool
     var isLocalAccount: () -> Bool
     var connect: () -> Void
     var showLimits: () -> Void
     var disconnect: () -> Void
+    var remove: () -> Void
+    var setProvider: (AccountProvider) -> Void
     @Environment(\.colorScheme) private var colorScheme
 
     private var index: Int { CodexUsageViewerPalette.index(for: account.id) }
@@ -281,17 +320,23 @@ private struct AccountCard: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if account.state != .disconnected {
+            if account.state != .disconnected || canRemove {
                 Menu {
                     if account.isConnected {
                         Button("All usage limits", systemImage: "chart.bar.xaxis", action: showLimits)
                             .accessibilityIdentifier("codexusageviewer.limits.\(account.id)")
                         Divider()
                     }
-                    Button("Reconnect", systemImage: "arrow.trianglehead.2.clockwise", action: connect)
-                        .disabled(isDemo)
-                    Button("Disconnect…", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive, action: disconnect)
-                        .disabled(isDemo)
+                    if account.state != .disconnected {
+                        Button("Reconnect", systemImage: "arrow.trianglehead.2.clockwise", action: connect)
+                            .disabled(!canManage)
+                        Button("Disconnect…", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive, action: disconnect)
+                            .disabled(!canManage)
+                    }
+                    if canRemove {
+                        Button("Remove account…", systemImage: "minus.circle", role: .destructive, action: remove)
+                            .disabled(!canManage)
+                    }
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 13, weight: .semibold))
@@ -310,6 +355,10 @@ private struct AccountCard: View {
 
     private var accountBadges: some View {
         HStack(spacing: 7) {
+            Text(account.provider.displayName)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("codexusageviewer.provider.\(account.id)")
             if account.isConnected, let plan = account.subscriptionDisplayName {
                 Text(plan)
                     .font(.system(size: 10, weight: .medium))
@@ -398,8 +447,10 @@ private struct AccountCard: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 233)
             }
-            AccountResourcesView(account: account, now: now)
-                .padding(.top, 16)
+            if account.provider == .codex {
+                AccountResourcesView(account: account, now: now)
+                    .padding(.top, 16)
+            }
             Spacer(minLength: 12)
             HStack(spacing: 4) {
                 if account.issue != nil || account.isStale(at: now) || hasElapsedWindow(now: now) {
@@ -458,13 +509,27 @@ private struct AccountCard: View {
                     .foregroundStyle(accent)
             }
             .padding(.top, 26)
-            Text(account.state == .needsSignIn ? "Reconnect this account" : "Connect a Codex account")
+            Text(account.state == .needsSignIn ? "Reconnect this account" : "Connect a \(account.provider.displayName) account")
                 .font(.system(size: 12, weight: .medium))
                 .padding(.top, 16)
             Text(account.state == .needsSignIn ? "Sign in to see current usage again." : "Choose the matching Chrome profile.")
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
                 .padding(.top, 5)
+            if account.state == .disconnected {
+                Picker("Account provider", selection: Binding(
+                    get: { account.provider }, set: { setProvider($0) }
+                )) {
+                    Text("Claude").tag(AccountProvider.claude)
+                    Text("Codex").tag(AccountProvider.codex)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.top, 16)
+                .disabled(!canManage)
+                .accessibilityLabel("Provider for \(account.displayName)")
+                .accessibilityIdentifier("codexusageviewer.providerPicker.\(account.id)")
+            }
             Spacer()
             Button(action: connect) {
                 Label(account.state == .needsSignIn ? "Sign in again" : "Connect account", systemImage: "plus")
@@ -472,10 +537,10 @@ private struct AccountCard: View {
             }
             .buttonStyle(.glass)
             .controlSize(.large)
-            .disabled(isDemo)
+            .disabled(!canManage)
             .accessibilityLabel("Connect \(account.displayName)")
             .accessibilityIdentifier("codexusageviewer.connect.\(account.id)")
-            Text("Account slot \(index + 1) of 3")
+            Text("Private \(account.provider.displayName) connection")
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
                 .padding(.top, 10)
@@ -614,7 +679,9 @@ private struct AccountLimitsSheet: View {
                         .foregroundStyle(CodexUsageViewerPalette.lilac)
                 }
 
-                AccountResourcesView(account: account, now: context.date)
+                if account.provider == .codex {
+                    AccountResourcesView(account: account, now: context.date)
+                }
 
                 if let warning = historicalWarning(now: context.date) {
                     Label(warning, systemImage: "clock.badge.exclamationmark")

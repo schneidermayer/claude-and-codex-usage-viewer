@@ -160,6 +160,23 @@ final class BackgroundStoreTests: XCTestCase {
         harness.assertHelperOwnsAllAccountWork()
     }
 
+    func testManualCodeIsBoundToHelperAttemptAndNotRepublished() async throws {
+        let harness = Harness()
+        defer { harness.finish() }
+        harness.background.state.snapshot.accounts[1].provider = .claude
+        harness.background.state.login = PendingLogin(id: "account-2", accountName: "Fixture",
+                                                      authURL: URL(string: "https://claude.com/cai/oauth/authorize?state=fixture"),
+                                                      isWaiting: true, attemptID: "fixture-attempt")
+        await harness.store.sendToBackground(.state)
+        await harness.store.submitLoginCode("synthetic-code#fixture", accountID: "account-2", loginID: "old-attempt")
+        XCTAssertEqual(harness.background.commands, [.state])
+        await harness.store.submitLoginCode("synthetic-code#fixture")
+        XCTAssertEqual(harness.background.commands, [.state, .submitLoginCode(accountID: "account-2", loginID: "fixture-attempt", code: "synthetic-code#fixture")])
+        let returnedState = String(decoding: try JSONEncoder().encode(harness.background.state), as: UTF8.self)
+        XCTAssertFalse(returnedState.contains("synthetic-code"))
+        harness.assertHelperOwnsAllAccountWork()
+    }
+
     func testDemoPreservesItsFixtureWhileCachingNewLiveHelperState() async {
         let harness = Harness()
         defer { harness.finish() }
@@ -271,6 +288,8 @@ final class BackgroundStoreTests: XCTestCase {
         // The helper stays alive while the app chooses a profile in a later login.
         let appSelection = ["account-1": "Profile 1", "account-2": "Profile 2"]
         preferences.set(appSelection, forKey: "chromeProfiles")
+        await engine.addAccount(provider: .codex)
+        await engine.addAccount(provider: .codex)
         await engine.connect("account-3")
 
         XCTAssertEqual(engine.login?.id, "account-3")

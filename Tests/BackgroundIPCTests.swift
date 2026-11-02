@@ -36,7 +36,10 @@ final class BackgroundIPCTests: XCTestCase {
         defer { client.shutdown() }
         let commands: [BackgroundCommand] = [
             .state, .refresh, .connect(accountID: "account-2"), .cancelLogin,
-            .disconnect(accountID: "account-3"), .setExecutable(path: "/fixture/codex")
+            .disconnect(accountID: "account-3"), .setExecutable(path: "/fixture/codex"),
+            .setClaudeExecutable(path: "/fixture/claude"), .addAccount(provider: .claude),
+            .removeAccount(accountID: "account-2"), .setProvider(accountID: "account-1", provider: .claude),
+            .submitLoginCode(accountID: "account-2", loginID: "fixture-login", code: "synthetic-code#fixture-state")
         ]
         for command in commands {
             let state = try await client.send(command)

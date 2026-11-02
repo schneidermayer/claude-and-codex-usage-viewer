@@ -4,9 +4,20 @@ import SwiftUI
 struct ConnectionSheet: View {
     @ObservedObject var store: CodexUsageViewerStore
     @State private var copied = false
+    @State private var authenticationCode = ""
 
     private var accent: Color {
         CodexUsageViewerPalette.accent(for: CodexUsageViewerPalette.index(for: store.login?.id ?? "account-1"))
+    }
+
+    private var provider: AccountProvider {
+        store.accounts.first(where: { $0.id == store.login?.id })?.provider ?? .codex
+    }
+
+    private var canSubmitCode: Bool {
+        store.login?.isWaiting == true && store.login?.isSubmittingCode != true
+            && store.login?.attemptID != nil
+            && !authenticationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -31,8 +42,8 @@ struct ConnectionSheet: View {
                     .tracking(-0.8)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(store.chromeProfiles.isEmpty
-                     ? "Use the browser profile that’s signed in to this Codex account."
-                     : "Choose the Chrome profile that’s signed in to this Codex account.")
+                     ? "Use the browser profile that’s signed in to this \(provider.displayName) account."
+                     : "Choose the Chrome profile that’s signed in to this \(provider.displayName) account.")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -43,7 +54,7 @@ struct ConnectionSheet: View {
                     step("1", title: "Copy your sign-in link", detail: "Each account gets its own connection.")
                     step("2", title: "Open the matching browser profile", detail: "Paste the link into a new tab in that profile.")
                 } else {
-                    step("1", title: "Choose the matching Chrome profile", detail: "Keep each of your three logins in its own profile.")
+                    step("1", title: "Choose the matching Chrome profile", detail: "Use a separate profile for each login.")
                     step("2", title: "Open your secure sign-in", detail: "We’ll open a tab in the profile you choose below.")
                 }
                 step("3", title: "Sign in, then return here", detail: "Check the account email shown after connecting.")
@@ -65,6 +76,37 @@ struct ConnectionSheet: View {
                 .pickerStyle(.menu)
                 .controlSize(.large)
                 .accessibilityIdentifier("codexusageviewer.connection.chromeProfile")
+            }
+
+            if provider == .claude, store.login?.authURL != nil {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("If Claude shows an authentication code, paste it here.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 10) {
+                        SecureField("Authentication code", text: $authenticationCode)
+                            .textFieldStyle(.roundedBorder)
+                            .privacySensitive()
+                            .accessibilityLabel("Claude authentication code")
+                            .accessibilityIdentifier("codexusageviewer.connection.authenticationCode")
+                            .disabled(store.login?.isWaiting != true || store.login?.isSubmittingCode == true)
+                            .onSubmit { submitCode() }
+                        Button(action: submitCode) {
+                            HStack(spacing: 6) {
+                                if store.login?.isSubmittingCode == true {
+                                    ProgressView().controlSize(.small)
+                                }
+                                Text(store.login?.isSubmittingCode == true ? "Submitting…" : "Submit code")
+                            }
+                        }
+                        .buttonStyle(.glass)
+                        .disabled(!canSubmitCode)
+                        .accessibilityLabel("Submit Claude authentication code")
+                        .accessibilityIdentifier("codexusageviewer.connection.submitCode")
+                    }
+                    .controlSize(.large)
+                }
             }
 
             if let error = store.login?.error {
@@ -137,6 +179,18 @@ struct ConnectionSheet: View {
         .frame(width: 490)
         .background(Color(nsColor: .windowBackgroundColor))
         .interactiveDismissDisabled(store.login?.isWaiting == true)
+        .onDisappear { authenticationCode = "" }
+        .onChange(of: store.login?.attemptID) { _, _ in
+            authenticationCode = ""
+            copied = false
+        }
+    }
+
+    private func submitCode() {
+        guard canSubmitCode, let pending = store.login, let attemptID = pending.attemptID else { return }
+        let code = authenticationCode
+        authenticationCode = ""
+        Task { await store.submitLoginCode(code, accountID: pending.id, loginID: attemptID) }
     }
 
     private func step(_ number: String, title: String, detail: String) -> some View {

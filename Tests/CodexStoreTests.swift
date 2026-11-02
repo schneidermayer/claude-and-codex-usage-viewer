@@ -24,6 +24,8 @@ private final class StoreConnectionFixture: CodexAccountConnection {
     var limitsHandler: (() async throws -> RateLimitsResponse)?
     var beginHandler: (() async throws -> CodexLogin)?
     var waitHandler: (() async throws -> Void)?
+    var submitHandler: (() async throws -> Void)?
+    var submittedCodes: [(String, String)] = []
     var accountCalls = 0
     var limitsCalls = 0
     var beginCalls = 0
@@ -51,6 +53,10 @@ private final class StoreConnectionFixture: CodexAccountConnection {
         return try await beginHandler?() ?? CodexLogin(loginId: "fixture-login", authURL: URL(string: "https://auth.openai.com/fixture")!)
     }
     func waitForLogin(loginID: String) async throws { try await waitHandler?() }
+    func submitLoginCode(code: String, loginID: String) async throws {
+        try await submitHandler?()
+        submittedCodes.append((code, loginID))
+    }
     func cancelLogin(loginID: String) async { canceledLogins.append(loginID) }
     func disconnect() async throws { disconnectCalls += 1; events.append("disconnected") }
     func stop() {}
@@ -60,6 +66,7 @@ private final class StoreConnectionFixture: CodexAccountConnection {
 final class CodexStoreTests: XCTestCase {
     @MainActor private final class Harness {
         let worker = StoreConnectionFixture()
+        let claudeWorker = StoreConnectionFixture()
         let preferences: UserDefaults
         let suite = "CodexUsageViewerStoreTests.\(UUID().uuidString)"
         var now = Date(timeIntervalSince1970: 1_850_000_000)
@@ -70,6 +77,8 @@ final class CodexStoreTests: XCTestCase {
         var saved: [UsageSnapshot] = []
         var widgetReloads = 0
         var cached: UsageSnapshot
+        var removedCredentials: [(String, AccountProvider)] = []
+        var removeHandler: (() async throws -> Void)?
         var store: CodexUsageViewerStore!
 
         init(connected: Bool = true, arguments: [String] = [], profiles: [ChromeProfile] = [], savedProfile: String? = nil) {
@@ -93,6 +102,11 @@ final class CodexStoreTests: XCTestCase {
                     localReadCalls += 1
                     if let localReadHandler { return try await localReadHandler() }
                     return localIdentity
+                }, locateClaudeExecutable: { _ in URL(fileURLWithPath: "/fixture/claude") },
+                makeClaudeConnection: { [unowned self] _, _ in claudeWorker }, claudeCredentialExists: { _ in false },
+                removeCredentials: { [unowned self] id, provider in
+                    try await removeHandler?()
+                    removedCredentials.append((id, provider))
                 })
             store = CodexUsageViewerStore(dependencies: dependencies, preferences: preferences, arguments: arguments)
         }
@@ -443,6 +457,178 @@ final class CodexStoreTests: XCTestCase {
         XCTAssertEqual(harness.worker.accountCalls, 0)
         XCTAssertEqual(harness.localReadCalls, 0)
         XCTAssertEqual(harness.worker.beginCalls, 0)
+        XCTAssertTrue(harness.saved.isEmpty)
+    }
+
+    func testAccountCreationRemovalAndProviderChoicePersistWithinBounds() async {
+        let harness = Harness(connected: false)
+        defer { harness.finish() }
+        await harness.store.removeAccount("account-3")
+        await harness.store.removeAccount("account-2")
+        await harness.store.removeAccount("account-1")
+        XCTAssertEqual(harness.store.accounts.map(\.id), ["account-1"])
+        await harness.store.setProvider(.claude, for: "account-1")
+        await harness.store.addAccount(provider: .codex)
+        await harness.store.addAccount(provider: .claude)
+        await harness.store.addAccount(provider: .codex)
+        XCTAssertEqual(harness.store.accounts.map(\.provider), [.claude, .codex, .claude])
+        XCTAssertFalse(harness.store.canAddAccount)
+        XCTAssertEqual(harness.saved.last?.accounts, harness.store.accounts)
+        XCTAssertEqual(harness.worker.disconnectCalls, 0, "Removing empty slots needs no CLI")
+        await harness.store.removeAccount("account-2")
+        await harness.store.addAccount(provider: .claude)
+        XCTAssertEqual(harness.store.accounts.map(\.id), ["account-1", "account-3", "account-2"])
+    }
+
+    func testClaudeLoginRefreshAndDisconnectUseOnlyClaudeWorker() async {
+        let harness = Harness(connected: false)
+        defer { harness.finish() }
+        harness.claudeWorker.identity = CodexIdentity(email: "claude@fixture.test", planType: "Pro", type: "claude")
+        harness.claudeWorker.limitsHandler = {
+            RateLimitsResponse(rateLimits: UsageBucket(limitId: "claude", secondary: QuotaWindow(usedPercent: 25, windowDurationMins: 10_080, resetsAt: 1_900_000_000)))
+        }
+        await harness.store.setProvider(.claude, for: "account-1")
+        await harness.store.connect("account-1")
+        await eventually { harness.store.login == nil && harness.claudeWorker.limitsCalls == 1 }
+        XCTAssertEqual(harness.store.accounts[0].provider, .claude)
+        XCTAssertEqual(harness.store.accounts[0].subscriptionDisplayName, "Pro")
+        XCTAssertEqual(harness.store.accounts[0].weeklyWindow?.remainingPercent, 75)
+        XCTAssertEqual(harness.worker.beginCalls, 0)
+        XCTAssertEqual(harness.worker.accountCalls, 0)
+        await harness.store.setProvider(.codex, for: "account-1")
+        XCTAssertEqual(harness.store.accounts[0].provider, .claude, "Connected accounts cannot change provider")
+        await harness.store.disconnect("account-1")
+        XCTAssertEqual(harness.claudeWorker.disconnectCalls, 1)
+        XCTAssertEqual(harness.store.accounts[0].provider, .claude)
+        XCTAssertEqual(harness.store.accounts[0].state, .disconnected)
+    }
+
+    func testAccountConfigurationCannotChangeDuringRefreshOrDemo() async {
+        let harness = Harness()
+        defer { harness.finish() }
+        let gate = Deferred<RateLimitsResponse>()
+        harness.worker.limitsHandler = { try await gate.wait() }
+        let refresh = Task { await harness.store.refresh() }
+        await eventually { harness.worker.limitsCalls == 1 }
+        await harness.store.removeAccount("account-2")
+        await harness.store.setProvider(.claude, for: "account-2")
+        XCTAssertEqual(harness.store.accounts.count, 3)
+        XCTAssertEqual(harness.store.accounts[1].provider, .codex)
+        gate.succeed(StoreConnectionFixture.limits)
+        await refresh.value
+        harness.store.setDemo(true)
+        let preview = harness.store.accounts
+        await harness.store.removeAccount("account-2")
+        XCTAssertEqual(harness.store.accounts, preview)
+    }
+
+    func testExpiredClaudeAuthenticationRequiresSignInAndClearsOldQuota() async {
+        let harness = Harness()
+        defer { harness.finish() }
+        harness.store.accounts[0].provider = .claude
+        harness.claudeWorker.identity = CodexIdentity(email: "old@fixture.test", planType: "plus", type: "claude")
+        harness.claudeWorker.limitsHandler = { throw ClaudeConnectionError.signInRequired }
+        await harness.store.refresh()
+        XCTAssertEqual(harness.store.accounts[0].state, .needsSignIn)
+        XCTAssertTrue(harness.store.accounts[0].buckets.isEmpty)
+        XCTAssertNil(harness.store.accounts[0].updatedAt)
+        XCTAssertNil(harness.store.accounts[0].resetCredits)
+        XCTAssertNotNil(harness.store.accounts[0].issue)
+    }
+
+    func testRemovingConnectedAccountForgetsOnlyItsPrivateCredentialsBeforeDroppingSlot() async {
+        let harness = Harness()
+        defer { harness.finish() }
+        await harness.store.removeAccount("account-1")
+        XCTAssertEqual(harness.worker.disconnectCalls, 0, "Removal must work without a functioning CLI")
+        XCTAssertEqual(harness.removedCredentials.map(\.0), ["account-1"])
+        XCTAssertEqual(harness.removedCredentials.map(\.1), [.codex])
+        XCTAssertEqual(harness.store.accounts.map(\.id), ["account-2", "account-3"])
+        XCTAssertEqual(harness.saved.last?.accounts.map(\.id), ["account-2", "account-3"])
+    }
+
+    func testRemovingAccountBlocksNewWorkUntilCredentialCleanupCompletes() async {
+        let harness = Harness()
+        defer { harness.finish() }
+        let gate = Deferred<Void>()
+        harness.removeHandler = { try await gate.wait() }
+        let removal = Task { await harness.store.removeAccount("account-2") }
+        await eventually { !harness.store.canManageAccounts }
+        await harness.store.refresh()
+        await harness.store.connect("account-3")
+        await harness.store.removeAccount("account-1")
+        XCTAssertEqual(harness.worker.accountCalls, 0)
+        XCTAssertEqual(harness.worker.beginCalls, 0)
+        XCTAssertEqual(harness.store.accounts.count, 3)
+        gate.succeed(())
+        await removal.value
+        XCTAssertEqual(harness.store.accounts.map(\.id), ["account-1", "account-3"])
+        XCTAssertTrue(harness.store.canManageAccounts)
+    }
+
+    func testCredentialCleanupFailureKeepsSlotAndReportsError() async {
+        let harness = Harness()
+        defer { harness.finish() }
+        harness.removeHandler = { throw StoreFixtureError.offline }
+        await harness.store.removeAccount("account-1")
+        XCTAssertEqual(harness.store.accounts.count, 3)
+        XCTAssertNotNil(harness.store.errorMessage)
+        XCTAssertTrue(harness.store.canManageAccounts)
+        XCTAssertTrue(harness.saved.isEmpty)
+    }
+
+    func testManualClaudeCodeUsesOnlyCurrentAttemptAndNeverEntersSnapshots() async throws {
+        let harness = Harness(connected: false)
+        defer { harness.finish() }
+        let finished = Deferred<Void>()
+        harness.claudeWorker.identity = CodexIdentity(email: "claude@fixture.test", planType: "Pro", type: "claude")
+        harness.claudeWorker.waitHandler = { try await finished.wait() }
+        await harness.store.setProvider(.claude, for: "account-1")
+        await harness.store.connect("account-1")
+        await eventually { harness.store.login?.attemptID == "fixture-login" }
+        await harness.store.submitLoginCode("synthetic-code#fixture-state", accountID: "account-2", loginID: "fixture-login")
+        await harness.store.submitLoginCode("synthetic-code#fixture-state", accountID: "account-1", loginID: "old-attempt")
+        XCTAssertTrue(harness.claudeWorker.submittedCodes.isEmpty)
+        await harness.store.submitLoginCode("synthetic-code#fixture-state")
+        XCTAssertEqual(harness.claudeWorker.submittedCodes.map(\.1), ["fixture-login"])
+        XCTAssertEqual(harness.store.login?.isSubmittingCode, true)
+        await harness.store.submitLoginCode("duplicate-code#fixture-state")
+        XCTAssertEqual(harness.claudeWorker.submittedCodes.count, 1)
+        let state = String(decoding: try JSONEncoder().encode(harness.store.backgroundState), as: UTF8.self)
+        XCTAssertFalse(state.contains("synthetic-code"))
+        finished.succeed(())
+        await eventually { harness.store.login == nil }
+        let saved = String(decoding: try JSONEncoder().encode(harness.saved), as: UTF8.self)
+        XCTAssertFalse(saved.contains("synthetic-code"))
+        XCTAssertEqual(harness.store.accounts[0].state, .connected)
+        XCTAssertEqual(harness.worker.submittedCodes.count, 0)
+    }
+
+    func testManualCodeFailureAllowsRetryWithoutExposingPrivateDiagnostic() async {
+        let harness = Harness(connected: false)
+        defer { harness.finish() }
+        harness.claudeWorker.waitHandler = { try await Task.sleep(for: .seconds(60)) }
+        harness.claudeWorker.submitHandler = {
+            throw NSError(domain: "fixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "private-code-value"])
+        }
+        await harness.store.setProvider(.claude, for: "account-1")
+        await harness.store.connect("account-1")
+        await eventually { harness.store.login?.attemptID != nil }
+        await harness.store.submitLoginCode("synthetic-code#fixture-state")
+        XCTAssertEqual(harness.store.login?.isSubmittingCode, false)
+        XCTAssertEqual(harness.store.login?.isWaiting, true)
+        XCTAssertFalse(harness.store.login?.error?.contains("private-code-value") ?? true)
+        harness.claudeWorker.identity = nil
+        await harness.store.cancelLogin()
+    }
+
+    func testManualCodeUITestFixtureNeverStartsWorkersOrPersistsCode() async {
+        let harness = Harness(arguments: ["--ui-testing", "--ui-testing-login-code"])
+        defer { harness.finish() }
+        XCTAssertEqual(harness.store.login?.attemptID, "fixture-attempt")
+        await harness.store.submitLoginCode("synthetic-code#fixture")
+        XCTAssertNil(harness.store.login)
+        XCTAssertEqual(harness.claudeWorker.beginCalls, 0)
         XCTAssertTrue(harness.saved.isEmpty)
     }
 }

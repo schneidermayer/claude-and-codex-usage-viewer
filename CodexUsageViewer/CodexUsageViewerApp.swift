@@ -21,20 +21,20 @@ struct CodexUsageViewerApp: App {
     @StateObject private var store = CodexUsageViewerStore()
 
     var body: some Scene {
-        Window("Codex Usage Viewer", id: "dashboard") {
+        Window("Claude and Codex Usage Viewer", id: "dashboard") {
             DashboardHost(store: store)
                 .onAppear { appDelegate.store = store }
         }
-        .defaultSize(width: 1040, height: 670)
+        .defaultSize(width: 1040, height: 720)
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .appTermination) {
-                Button("Quit Codex Usage Viewer \(CodexUsageViewerVersion.display)") { NSApp.terminate(nil) }
+                Button("Quit Claude and Codex Usage Viewer \(CodexUsageViewerVersion.display)") { NSApp.terminate(nil) }
                     .keyboardShortcut("q")
             }
             CommandGroup(replacing: .appInfo) {
-                Button("About Codex Usage Viewer") {
+                Button("About Claude and Codex Usage Viewer") {
                     NSApp.orderFrontStandardAboutPanel(options: [.applicationVersion: CodexUsageViewerVersion.display])
                 }
             }

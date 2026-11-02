@@ -67,7 +67,7 @@ end
       config.build_settings['APPLICATION_EXTENSION_API_ONLY'] = 'YES'
       config.build_settings['SKIP_INSTALL'] = 'YES'
     else
-      config.build_settings['PRODUCT_NAME'] = 'Codex Usage Viewer'
+      config.build_settings['PRODUCT_NAME'] = 'Claude and Codex Usage Viewer'
       config.build_settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
       config.build_settings['ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME'] = 'AccentColor'
     end

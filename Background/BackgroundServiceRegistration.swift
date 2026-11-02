@@ -14,7 +14,7 @@ final class BackgroundServiceRegistration {
         switch service.status {
         case .enabled: return nil
         case .requiresApproval:
-            return "Allow Codex Usage Viewer in System Settings → General → Login Items & Extensions to keep usage updated."
+            return "Allow Claude and Codex Usage Viewer in System Settings → General → Login Items & Extensions to keep usage updated."
         default:
             return registrationError ?? "Background updates aren’t running. Retry in Settings."
         }

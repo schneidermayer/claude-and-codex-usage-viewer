@@ -185,6 +185,13 @@ enum AccountConnectionState: String, Codable, Sendable {
     case disconnected, connected, needsSignIn
 }
 
+enum AccountProvider: String, Codable, CaseIterable, Sendable {
+    case codex, claude
+
+    var displayName: String { self == .codex ? "Codex" : "Claude" }
+    var identityType: String { self == .codex ? "chatgpt" : "claude" }
+}
+
 struct AccountSnapshot: Codable, Equatable, Identifiable, Sendable {
     var id: String
     var name: String
@@ -196,6 +203,7 @@ struct AccountSnapshot: Codable, Equatable, Identifiable, Sendable {
     var issue: String?
     var fullName: String? = nil
     var resetCredits: RateLimitResetCredits? = nil
+    var provider: AccountProvider = .codex
 
     // Legacy slot labels remain decodable but are never used as account names.
     var displayName: String {
@@ -208,6 +216,7 @@ struct AccountSnapshot: Codable, Equatable, Identifiable, Sendable {
     /// Display labels; preserve the reported plan in storage.
     var subscriptionDisplayName: String? {
         guard let plan = plan?.trimmingCharacters(in: .whitespacesAndNewlines), !plan.isEmpty else { return nil }
+        guard provider == .codex else { return plan }
         switch plan.lowercased() {
         case "prolite": return "100"
         case "pro": return "200"
@@ -216,7 +225,7 @@ struct AccountSnapshot: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
-    var primaryBucket: UsageBucket? { buckets.first(where: { $0.id == "codex" }) ?? buckets.first }
+    var primaryBucket: UsageBucket? { buckets.first(where: { $0.id == provider.rawValue }) ?? buckets.first }
     var isConnected: Bool { state == .connected }
 
     func creditsValue(at date: Date = .now) -> AccountResourceValue {
@@ -246,14 +255,31 @@ struct AccountSnapshot: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+extension AccountSnapshot {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        email = try values.decodeIfPresent(String.self, forKey: .email)
+        plan = try values.decodeIfPresent(String.self, forKey: .plan)
+        state = try values.decode(AccountConnectionState.self, forKey: .state)
+        buckets = try values.decode([UsageBucket].self, forKey: .buckets)
+        updatedAt = try values.decodeIfPresent(Date.self, forKey: .updatedAt)
+        issue = try values.decodeIfPresent(String.self, forKey: .issue)
+        fullName = try values.decodeIfPresent(String.self, forKey: .fullName)
+        resetCredits = try values.decodeIfPresent(RateLimitResetCredits.self, forKey: .resetCredits)
+        provider = try values.decodeIfPresent(AccountProvider.self, forKey: .provider) ?? .codex
+    }
+}
+
 struct UsageSnapshot: Codable, Equatable, Sendable {
-    var version = 1
+    var version = 2
     var accounts: [AccountSnapshot]
     var savedAt: Date
     var localCodexEmail: String? = nil
     var localCodexCheckedAt: Date? = nil
     func isLocalAccount(_ account: AccountSnapshot, at date: Date = .now) -> Bool {
-        guard account.isConnected, let email = account.email, let localCodexEmail,
+        guard account.provider == .codex, account.isConnected, let email = account.email, let localCodexEmail,
               let checkedAt = localCodexCheckedAt,
               date.timeIntervalSince(checkedAt) <= CodexUsageViewerConstants.staleInterval,
               date.timeIntervalSince(checkedAt) >= -60 else { return false }
@@ -261,7 +287,7 @@ struct UsageSnapshot: Codable, Equatable, Sendable {
         let localEmail = localCodexEmail.trimmingCharacters(in: .whitespacesAndNewlines)
         return !accountEmail.isEmpty && !localEmail.isEmpty && accountEmail.caseInsensitiveCompare(localEmail) == .orderedSame
     }
-    static var empty: UsageSnapshot { UsageSnapshot(accounts: AccountSnapshot.emptyAccounts, savedAt: .now) }
+    static var empty: UsageSnapshot { UsageSnapshot(accounts: [AccountSnapshot.emptyAccounts[0]], savedAt: .now) }
 
     // Synthetic preview/test data; never persisted.
     static var preview: UsageSnapshot {
@@ -278,6 +304,12 @@ struct UsageSnapshot: Codable, Equatable, Sendable {
             accounts[index].buckets[0].credits = [CreditBalance(hasCredits: true, unlimited: false, balance: "125.5"), CreditBalance(hasCredits: false, unlimited: false, balance: "0"), CreditBalance(hasCredits: true, unlimited: true, balance: nil)][index]
             accounts[index].resetCredits = RateLimitResetCredits(availableCount: [2, 0, 1][index], earliestExpiresAt: Int(now.timeIntervalSince1970) + 86_400)
         }
+        accounts[1].provider = .claude
+        accounts[1].plan = "Pro"
+        accounts[1].buckets[0].limitId = "claude"
+        accounts[1].buckets[0].limitName = "Claude"
+        accounts[1].buckets[0].credits = nil
+        accounts[1].resetCredits = nil
         return UsageSnapshot(accounts: accounts, savedAt: now)
     }
 }

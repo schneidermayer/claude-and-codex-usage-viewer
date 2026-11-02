@@ -162,10 +162,11 @@ final class UsageModelsTests: XCTestCase {
         XCTAssertFalse(account.isStale(at: now))
     }
 
-    func testExactlyThreeStableSlotsAndNoFabricatedInitialData() {
+    func testOneInitialAccountAndThreeAvailableSlotsWithoutFabricatedData() {
         let snapshot = UsageSnapshot.empty
-        XCTAssertEqual(snapshot.accounts.map(\.id), CodexUsageViewerConstants.accountIDs)
-        XCTAssertEqual(snapshot.accounts.count, 3)
+        XCTAssertEqual(snapshot.accounts.map(\.id), ["account-1"])
+        XCTAssertEqual(snapshot.accounts.count, 1)
+        XCTAssertEqual(CodexUsageViewerConstants.accountIDs.count, 3)
         XCTAssertTrue(snapshot.accounts.allSatisfy { $0.state == .disconnected && $0.buckets.isEmpty && $0.updatedAt == nil })
     }
 

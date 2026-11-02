@@ -44,7 +44,7 @@ def main():
     run('python3', 'scripts/test_version.py')
     run('swift', 'test')
     run('./scripts/build.sh', 'ARCHS=arm64 x86_64', 'ONLY_ACTIVE_ARCH=NO')
-    app = ROOT / 'build/Build/Products/Release/Codex Usage Viewer.app'
+    app = ROOT / 'build/Build/Products/Release/Claude and Codex Usage Viewer.app'
     info = json.loads((app / 'Contents/Resources/BuildVersion.json').read_text())
     if info['display'] != args.version or info['commit'] != git(ROOT, 'rev-parse', 'HEAD'):
         raise RuntimeError('built version does not match the release tag')
@@ -60,7 +60,7 @@ def main():
             raise RuntimeError('release signatures require secure timestamps and must omit the debugging entitlement')
     output = ROOT / 'dist' / args.version
     output.mkdir(parents=True, exist_ok=True)
-    archive = output / f'Codex-Usage-Viewer-{args.version}.zip'
+    archive = output / f'Claude-and-Codex-Usage-Viewer-{args.version}.zip'
     run('ditto', '-c', '-k', '--keepParent', str(app), str(archive))
     run('xcrun', 'notarytool', 'submit', str(archive), '--keychain-profile', profile, '--wait', '--output-format', 'json', stdout=(output / 'notarization.json').open('w'))
     notarization = json.loads((output / 'notarization.json').read_text())
@@ -74,8 +74,8 @@ def main():
     checksum = output / 'SHA256SUMS.txt'
     checksum.write_text(f'{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n')
     run('git', 'push', '--atomic', 'origin', branch, f'refs/tags/{args.version}')
-    run('gh', 'release', 'create', args.version, str(archive), str(checksum), '--verify-tag', '--title', f'Codex Usage Viewer {args.version}', '--notes-file', str(args.notes.resolve()))
-    print(f'Published Codex Usage Viewer {info["display"]}')
+    run('gh', 'release', 'create', args.version, str(archive), str(checksum), '--verify-tag', '--title', f'Claude and Codex Usage Viewer {args.version}', '--notes-file', str(args.notes.resolve()))
+    print(f'Published Claude and Codex Usage Viewer {info["display"]}')
 
 
 if __name__ == '__main__':

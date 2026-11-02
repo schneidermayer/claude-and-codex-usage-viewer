@@ -6,6 +6,7 @@ struct CodexUsageViewerSettingsView: View {
     @ObservedObject var store: CodexUsageViewerStore
     @Environment(\.dismiss) private var dismiss
     @State private var executablePath = ""
+    @State private var claudeExecutablePath = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 23) {
@@ -15,45 +16,19 @@ struct CodexUsageViewerSettingsView: View {
                     Text("Settings")
                         .font(.system(size: 22, weight: .semibold))
                         .tracking(-0.65)
-                    Text("Codex Usage Viewer · Version \(CodexUsageViewerVersion.display)")
+                    Text("Claude and Codex Usage Viewer · Version \(CodexUsageViewerVersion.display)")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
             }
 
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Text("Codex connection").font(.system(size: 13, weight: .semibold))
-                    Spacer()
-                    Label(store.availableCodex ? "Ready" : "Setup needed", systemImage: store.availableCodex ? "checkmark.circle.fill" : "exclamationmark.circle")
-                        .font(.system(size: 11))
-                        .foregroundStyle(store.availableCodex ? CodexUsageViewerPalette.mint : .orange)
-                }
-                Text("Codex Usage Viewer uses the Codex command-line app installed on this Mac to securely sign in and read usage.")
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Choose the command-line apps used for your private account connections.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    TextField("Automatic detection", text: $executablePath)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Codex executable path")
-                        .accessibilityIdentifier("codexusageviewer.settings.executable")
-                        .onSubmit { store.codexPath = executablePath }
-                    Button("Choose…", action: chooseExecutable)
-                }
-                HStack {
-                    Button("Use automatic detection") {
-                        executablePath = ""
-                        store.codexPath = ""
-                    }
-                    .buttonStyle(.link)
-                    .font(.system(size: 11))
-                    Spacer()
-                    if executablePath != store.codexPath {
-                        Button("Apply") { store.codexPath = executablePath }
-                            .buttonStyle(.glass)
-                    }
-                }
+                connection(provider: .claude, path: $claudeExecutablePath, available: store.availableClaude)
+                Divider()
+                connection(provider: .codex, path: $executablePath, available: store.availableCodex)
             }
             .padding(18)
             .background(.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 16))
@@ -89,6 +64,7 @@ struct CodexUsageViewerSettingsView: View {
                 Spacer()
                 Button("Done") {
                     if executablePath != store.codexPath { store.codexPath = executablePath }
+                    if claudeExecutablePath != store.claudePath { store.claudePath = claudeExecutablePath }
                     dismiss()
                 }
                 .buttonStyle(.glass)
@@ -97,8 +73,11 @@ struct CodexUsageViewerSettingsView: View {
             }
         }
         .padding(28)
-        .frame(width: 500)
-        .onAppear { executablePath = store.codexPath }
+        .frame(width: 540)
+        .onAppear {
+            executablePath = store.codexPath
+            claudeExecutablePath = store.claudePath
+        }
         .onExitCommand { dismiss() }
     }
 
@@ -116,17 +95,56 @@ struct CodexUsageViewerSettingsView: View {
         }
     }
 
-    private func chooseExecutable() {
+    private func connection(provider: AccountProvider, path: Binding<String>, available: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("\(provider.displayName) connection").font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Label(available ? "Ready" : "Setup needed", systemImage: available ? "checkmark.circle.fill" : "exclamationmark.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(available ? CodexUsageViewerPalette.mint : .orange)
+            }
+            HStack {
+                TextField("Automatic detection", text: path)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("\(provider.displayName) executable path")
+                    .accessibilityIdentifier(provider == .codex ? "codexusageviewer.settings.executable" : "codexusageviewer.settings.claudeExecutable")
+                    .onSubmit { applyPath(path.wrappedValue, provider: provider) }
+                Button("Choose…") { chooseExecutable(provider: provider) }
+            }
+            HStack {
+                Button("Use automatic detection") {
+                    path.wrappedValue = ""
+                    applyPath("", provider: provider)
+                }
+                .buttonStyle(.link)
+                .font(.system(size: 11))
+                Spacer()
+                if path.wrappedValue != (provider == .codex ? store.codexPath : store.claudePath) {
+                    Button("Apply") { applyPath(path.wrappedValue, provider: provider) }
+                        .buttonStyle(.glass)
+                }
+            }
+        }
+    }
+
+    private func applyPath(_ path: String, provider: AccountProvider) {
+        if provider == .codex { store.codexPath = path }
+        else { store.claudePath = path }
+    }
+
+    private func chooseExecutable(provider: AccountProvider) {
         let panel = NSOpenPanel()
-        panel.title = "Choose the Codex executable"
-        panel.message = "Select the codex command-line executable installed on this Mac."
+        panel.title = "Choose the \(provider.displayName) executable"
+        panel.message = "Select the \(provider.displayName) command-line executable installed on this Mac."
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.showsHiddenFiles = true
         panel.prompt = "Choose"
         if panel.runModal() == .OK, let url = panel.url {
-            executablePath = url.path
-            store.codexPath = url.path
+            if provider == .codex { executablePath = url.path }
+            else { claudeExecutablePath = url.path }
+            applyPath(url.path, provider: provider)
         }
     }
 }

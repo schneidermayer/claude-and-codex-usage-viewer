@@ -41,9 +41,16 @@ protocol CodexAccountConnection: AnyObject {
     func readLimits() async throws -> RateLimitsResponse
     func beginLogin() async throws -> CodexLogin
     func waitForLogin(loginID: String) async throws
+    func submitLoginCode(code: String, loginID: String) async throws
     func cancelLogin(loginID: String) async
     func disconnect() async throws
     func stop()
+}
+
+extension CodexAccountConnection {
+    func submitLoginCode(code: String, loginID: String) async throws {
+        throw CodexConnectionError.loginFailed
+    }
 }
 
 /// One process and private CODEX_HOME per account.
@@ -115,6 +122,21 @@ final class CodexConnection: CodexAccountConnection {
         self.requestTimeout = 30
         self.loginTimeout = 15 * 60
         self.localIdentityOnly = false
+    }
+
+    /// Explicit removal forgets only this viewer's private sign-in, without requiring a working CLI.
+    static func removeCredentials(accountID: String) throws {
+        guard CodexUsageViewerConstants.accountIDs.contains(accountID) else { throw CodexConnectionError.invalidAccount }
+        let manager = FileManager.default
+        let root = manager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/CodexUsageViewer/Accounts", isDirectory: true)
+        for parent in [root.deletingLastPathComponent(), root] where manager.fileExists(atPath: parent.path) {
+            guard try manager.attributesOfItem(atPath: parent.path)[.type] as? FileAttributeType == .typeDirectory else {
+                throw CodexConnectionError.invalidAccount
+            }
+        }
+        let directory = root.appendingPathComponent(accountID, isDirectory: true)
+        if manager.fileExists(atPath: directory.path) { try manager.removeItem(at: directory) }
     }
 
     init(accountID: String, executableURL: URL, accountRoot: URL, requestTimeout: TimeInterval, loginTimeout: TimeInterval = 900) {
@@ -249,7 +271,7 @@ final class CodexConnection: CodexAccountConnection {
             guard let self else { throw CodexConnectionError.stopped }
             try self.startTransport()
             let _: EmptyResponse = try await self.request("initialize", params: [
-                "clientInfo": ["name": "codexusageviewer", "title": "Codex Usage Viewer", "version": CodexUsageViewerVersion.display],
+                "clientInfo": ["name": "codexusageviewer", "title": "Claude and Codex Usage Viewer", "version": CodexUsageViewerVersion.display],
                 "capabilities": ["experimentalApi": false]
             ])
             try Task.checkCancellation()

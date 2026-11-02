@@ -28,8 +28,13 @@ enum BackgroundCommand: Codable, Equatable, Sendable {
     case refresh
     case connect(accountID: String)
     case cancelLogin
+    case submitLoginCode(accountID: String, loginID: String, code: String)
     case disconnect(accountID: String)
     case setExecutable(path: String)
+    case setClaudeExecutable(path: String)
+    case addAccount(provider: AccountProvider)
+    case removeAccount(accountID: String)
+    case setProvider(accountID: String, provider: AccountProvider)
 }
 
 /// Transient app/helper state. Only `snapshot` is suitable for widget persistence.
@@ -43,6 +48,8 @@ struct BackgroundState: Codable, Sendable {
     var errorMessage: String?
     var codexPath: String
     var helperVersion: String = CodexUsageViewerVersion.display
+    var availableClaude: Bool = false
+    var claudePath: String = ""
 }
 
 @MainActor
@@ -147,7 +154,7 @@ final class BackgroundClient: BackgroundServing {
         let requestID = UUID()
         let timeoutInterval: TimeInterval
         switch command {
-        case .cancelLogin, .disconnect: timeoutInterval = requestTimeout
+        case .cancelLogin, .disconnect, .removeAccount: timeoutInterval = requestTimeout
         default: timeoutInterval = min(requestTimeout, 15)
         }
         return try await withTaskCancellationHandler {

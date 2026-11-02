@@ -10,24 +10,31 @@ enum SharedSnapshotStore {
     static func load() -> UsageSnapshot {
         guard let url = fileURL,
               let data = try? Data(contentsOf: url),
-              let snapshot = try? JSONDecoder().decode(UsageSnapshot.self, from: data),
-              snapshot.version == 1 else { return .empty }
-        // Ignore unknown account slots.
-        var safe = UsageSnapshot.empty
-        for index in safe.accounts.indices {
-            if let account = snapshot.accounts.first(where: { $0.id == safe.accounts[index].id }) {
-                safe.accounts[index] = account
+              let snapshot = try? JSONDecoder().decode(UsageSnapshot.self, from: data) else { return .empty }
+        return normalized(snapshot)
+    }
+
+    static func normalized(_ snapshot: UsageSnapshot) -> UsageSnapshot {
+        guard [1, 2].contains(snapshot.version) else { return .empty }
+        var safe = snapshot
+        safe.version = 2
+        var seen = Set<String>()
+        safe.accounts = snapshot.accounts.filter {
+            CodexUsageViewerConstants.accountIDs.contains($0.id) && seen.insert($0.id).inserted
+        }
+        if snapshot.version == 1 {
+            // Preserve all legacy slots, including app-owned sign-ins without cached usage.
+            for account in AccountSnapshot.emptyAccounts where !seen.contains(account.id) {
+                safe.accounts.append(account)
             }
         }
-        safe.savedAt = snapshot.savedAt
-        safe.localCodexEmail = snapshot.localCodexEmail
-        safe.localCodexCheckedAt = snapshot.localCodexCheckedAt
+        if safe.accounts.isEmpty { safe.accounts = UsageSnapshot.empty.accounts }
         return safe
     }
 
     static func save(_ snapshot: UsageSnapshot) throws {
         guard let url = fileURL else {
-            throw NSError(domain: "CodexUsageViewer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Codex Usage Viewer couldn’t access its widget storage. Check the app’s signing and App Group configuration."])
+            throw NSError(domain: "CodexUsageViewer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Claude and Codex Usage Viewer couldn’t access its widget storage. Check the app’s signing and App Group configuration."])
         }
         try write(snapshot, to: url)
     }

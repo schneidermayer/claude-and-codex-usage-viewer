@@ -7,22 +7,49 @@ final class CodexUsageViewerUITests: XCTestCase {
         if let value = element.value as? String, !value.isEmpty { return value }
         return element.label
     }
-    private func launch(connected: Bool = false) -> XCUIApplication {
+    private func launch(connected: Bool = false, loginCode: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"] + (connected ? ["--ui-testing-connected"] : [])
+            + (loginCode ? ["--ui-testing-login-code"] : [])
         app.launch()
         XCTAssertTrue(app.staticTexts["codexusageviewer.title"].waitForExistence(timeout: 10))
         return app
     }
 
-    func testThreeEmptyAccountsAndHonestPreview() {
+    func testClaudeManualCodeUsesSecureFieldAndSubmits() {
+        for submitWithReturn in [false, true] {
+            let app = launch(loginCode: true)
+            defer { app.terminate() }
+            let field = app.secureTextFields["codexusageviewer.connection.authenticationCode"]
+            let submit = app.buttons["codexusageviewer.connection.submitCode"]
+            XCTAssertTrue(field.waitForExistence(timeout: 3))
+            XCTAssertTrue(app.staticTexts["If Claude shows an authentication code, paste it here."].exists)
+            XCTAssertFalse(submit.isEnabled)
+            field.click()
+            field.typeText("synthetic-code#fixture")
+            XCTAssertTrue(submit.isEnabled)
+            XCTAssertNotEqual(field.value as? String, "synthetic-code#fixture", "The code must remain masked in accessibility output.")
+            if submitWithReturn {
+                field.typeKey(.return, modifierFlags: [])
+            } else {
+                let screenshot = XCTAttachment(screenshot: app.screenshot())
+                screenshot.name = "Claude manual authentication code fixture"
+                screenshot.lifetime = .keepAlways
+                add(screenshot)
+                submit.click()
+            }
+            XCTAssertTrue(field.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(app.buttons["codexusageviewer.connect.account-1"].isEnabled)
+        }
+    }
+
+    func testOneEmptyAccountAndHonestPreview() {
         let app = launch()
         defer { app.terminate() }
 
-        for index in 1...3 {
-            XCTAssertTrue(app.buttons["codexusageviewer.connect.account-\(index)"].exists)
-        }
-        XCTAssertTrue(app.staticTexts["0 of 3 connected"].exists)
+        XCTAssertTrue(app.buttons["codexusageviewer.connect.account-1"].exists)
+        XCTAssertFalse(app.buttons["codexusageviewer.connect.account-2"].exists)
+        XCTAssertTrue(app.staticTexts["0 of 1 connected"].exists)
 
         app.buttons["codexusageviewer.preview"].click()
         let previewBanner = app.descendants(matching: .any).matching(identifier: "codexusageviewer.preview.banner").firstMatch
@@ -38,11 +65,48 @@ final class CodexUsageViewerUITests: XCTestCase {
         XCTAssertFalse(app.buttons["codexusageviewer.refresh"].isEnabled)
 
         app.buttons["codexusageviewer.preview"].click()
-        XCTAssertTrue(app.staticTexts["0 of 3 connected"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["0 of 1 connected"].waitForExistence(timeout: 3))
         XCTAssertFalse(previewBanner.exists)
-        for index in 1...3 {
-            XCTAssertTrue(app.buttons["codexusageviewer.connect.account-\(index)"].exists)
+        XCTAssertTrue(app.buttons["codexusageviewer.connect.account-1"].exists)
+        XCTAssertFalse(app.buttons["codexusageviewer.connect.account-2"].exists)
+    }
+
+    func testAddMixedAccountsAndRemoveDownToOne() {
+        let app = launch()
+        defer { app.terminate() }
+        let add = app.descendants(matching: .any).matching(identifier: "codexusageviewer.addAccount").firstMatch
+        add.click()
+        app.menuItems["Add Claude account"].click()
+        XCTAssertTrue(app.buttons["codexusageviewer.connect.account-2"].waitForExistence(timeout: 3))
+        XCTAssertEqual(visibleText(app.staticTexts["codexusageviewer.provider.account-2"]), "Claude")
+        add.click()
+        app.menuItems["Add Codex account"].click()
+        XCTAssertTrue(app.buttons["codexusageviewer.connect.account-3"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["0 of 3 connected"].exists)
+        XCTAssertFalse(add.isEnabled)
+        for index in [3, 2] {
+            app.descendants(matching: .any).matching(identifier: "codexusageviewer.options.account-\(index)").firstMatch.click()
+            app.menuItems["Remove account…"].click()
+            let remove = app.sheets.buttons["Remove account"].firstMatch
+            XCTAssertTrue(remove.waitForExistence(timeout: 3))
+            remove.click()
+            XCTAssertFalse(app.buttons["codexusageviewer.connect.account-\(index)"].waitForExistence(timeout: 1))
         }
+        XCTAssertTrue(app.staticTexts["0 of 1 connected"].exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "codexusageviewer.options.account-1").firstMatch.exists)
+        XCTAssertTrue(add.isEnabled)
+    }
+
+    func testChooseProviderBeforeConnecting() {
+        let app = launch()
+        defer { app.terminate() }
+        let picker = app.descendants(matching: .any).matching(identifier: "codexusageviewer.providerPicker.account-1").firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 3))
+        picker.radioButtons["Claude"].click()
+        XCTAssertTrue(app.staticTexts["Connect a Claude account"].waitForExistence(timeout: 3))
+        XCTAssertEqual(visibleText(app.staticTexts["codexusageviewer.provider.account-1"]), "Claude")
+        picker.radioButtons["Codex"].click()
+        XCTAssertTrue(app.staticTexts["Connect a Codex account"].waitForExistence(timeout: 3))
     }
 
     func testSettingsWithPointerAndEscape() {
@@ -52,6 +116,7 @@ final class CodexUsageViewerUITests: XCTestCase {
         app.buttons["codexusageviewer.settings"].click()
         let field = app.textFields["codexusageviewer.settings.executable"]
         XCTAssertTrue(field.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.textFields["codexusageviewer.settings.claudeExecutable"].exists)
         XCTAssertTrue(app.staticTexts["Background updates"].exists)
         XCTAssertTrue(app.staticTexts["codexusageviewer.settings.backgroundStatus"].exists)
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "codexusageviewer.settings.loginItems").firstMatch.isHittable)
@@ -84,15 +149,21 @@ final class CodexUsageViewerUITests: XCTestCase {
         XCTAssertTrue(badge.waitForExistence(timeout: 3))
         XCTAssertEqual(visibleText(plan), "Subscription plan: 200")
         let fallbackPlan = app.descendants(matching: .any).matching(identifier: "codexusageviewer.plan.account-2").firstMatch
-        XCTAssertEqual(visibleText(fallbackPlan), "Subscription plan: plus")
+        XCTAssertEqual(visibleText(fallbackPlan), "Subscription plan: Pro")
+        XCTAssertEqual(visibleText(app.staticTexts["codexusageviewer.provider.account-2"]), "Claude")
         XCTAssertEqual(badge.label, "Logged In")
         XCTAssertTrue(plan.isHittable)
         XCTAssertTrue(badge.isHittable)
 
-        // Fixture cards expose both resources, including reported zeros.
+        // Only Codex exposes credits and earned resets. Claude keeps its reported plan.
         for (index, expected) in [("125.5", "2"), ("0", "0"), ("Unlimited", "1")].enumerated() {
             let credits = app.descendants(matching: .any).matching(identifier: "codexusageviewer.credits.account-\(index + 1)").firstMatch
             let resets = app.descendants(matching: .any).matching(identifier: "codexusageviewer.availableResets.account-\(index + 1)").firstMatch
+            if index == 1 {
+                XCTAssertFalse(credits.exists)
+                XCTAssertFalse(resets.exists)
+                continue
+            }
             XCTAssertTrue(credits.isHittable)
             XCTAssertTrue(resets.isHittable)
             XCTAssertEqual(credits.label, "Available credits: \(expected.0)")
@@ -130,11 +201,11 @@ final class CodexUsageViewerUITests: XCTestCase {
         for text in ["CODEX USAGE, IN ONE PLACE", "A little more headspace.", "Three accounts. A clear view of what’s left.", "YOUR ACCOUNTS"] {
             XCTAssertFalse(app.staticTexts[text].exists)
         }
-        let appMenu = app.menuBars.menuBarItems["Codex Usage Viewer"]
+        let appMenu = app.menuBars.menuBarItems["Claude and Codex Usage Viewer"]
         XCTAssertTrue(appMenu.exists)
         appMenu.click()
         let displayedVersion = String(versionText.dropFirst("Version ".count))
-        let quit = app.menuItems["Quit Codex Usage Viewer \(displayedVersion)"]
+        let quit = app.menuItems["Quit Claude and Codex Usage Viewer \(displayedVersion)"]
         XCTAssertTrue(quit.waitForExistence(timeout: 3))
         quit.click()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 3))
