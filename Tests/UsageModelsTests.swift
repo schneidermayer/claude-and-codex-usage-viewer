@@ -109,6 +109,22 @@ final class UsageModelsTests: XCTestCase {
         XCTAssertEqual(AccountResourceValue.amount("1234567.891234").compactText, "1.2M")
     }
 
+    func testSmallWidgetBalancesStayShortWithoutRoundingUpOrChangingFullValues() {
+        for (balance, expected) in [("7100", "7.1k"), ("71000", "71k"), ("71999", "71k"),
+                                    ("9999.99", "9.9k"), ("999999", "999k"), ("1000000", "1M"),
+                                    ("125.5", "125"), ("61.354207891", "61.3"), ("999.99", "999"),
+                                    ("0.125", "0.12"), ("0.00001", "<0.01"), ("0", "0")] {
+            let value = AccountResourceValue.amount(balance)
+            XCTAssertEqual(value.shortText, expected, balance)
+            XCTAssertEqual(value, .amount(balance))
+        }
+        XCTAssertEqual(AccountResourceValue.amount("71999").accessibilityText, "71999")
+        XCTAssertEqual(AccountResourceValue.amount("61.354207891").text, "61.35")
+        XCTAssertEqual(AccountResourceValue.unknown.shortText, "—")
+        XCTAssertEqual(AccountResourceValue.unlimited.shortText, "∞")
+        XCTAssertEqual(AccountResourceValue.available.shortText, "Yes")
+    }
+
     func testSubscriptionDisplayLabelsPreserveReportedPlansAndUnknownNames() {
         for (reported, displayed) in [("prolite", "100"), ("PRO", "200"), (" ProMax\n", "500"),
                                       ("Enterprise Research", "Enterprise Research"), ("plus", "plus"),

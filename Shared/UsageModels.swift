@@ -103,6 +103,13 @@ enum AccountResourceValue: Equatable, Sendable {
         }
     }
 
+    /// A tighter balance for side-by-side resources in Small widget columns.
+    /// Round down so shortening never promises more credit than was reported.
+    var shortText: String {
+        guard case .amount(let value) = self else { return compactText }
+        return Self.compactAmount(value, short: true)
+    }
+
     var accessibilityText: String { text }
 
     fileprivate static func decimal(_ value: String) -> Decimal? {
@@ -114,7 +121,7 @@ enum AccountResourceValue: Equatable, Sendable {
         return number
     }
 
-    private static func compactAmount(_ value: String) -> String {
+    private static func compactAmount(_ value: String, short: Bool = false) -> String {
         guard let number = decimal(value) else { return value }
         let formatter = NumberFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -126,10 +133,18 @@ enum AccountResourceValue: Equatable, Sendable {
             if number >= threshold {
                 if number >= Decimal(1_000_000_000_000_000) {
                     formatter.numberStyle = .scientific
+                    if short { formatter.maximumFractionDigits = 0 }
                     return formatter.string(from: NSDecimalNumber(decimal: number)) ?? value
                 }
-                return (formatter.string(from: NSDecimalNumber(decimal: number / threshold)) ?? value) + suffix
+                let scaled = number / threshold
+                if short { formatter.maximumFractionDigits = scaled < 10 ? 1 : 0 }
+                return (formatter.string(from: NSDecimalNumber(decimal: scaled)) ?? value)
+                    + (short && suffix == "K" ? "k" : suffix)
             }
+        }
+        if short, number >= Decimal(string: "0.01")! {
+            formatter.maximumFractionDigits = number >= 100 ? 0 : (number >= 10 ? 1 : 2)
+            return formatter.string(from: NSDecimalNumber(decimal: number)) ?? value
         }
         return decimalText(number)
     }

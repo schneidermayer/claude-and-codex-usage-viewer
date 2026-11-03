@@ -58,10 +58,7 @@ final class CodexUsageViewerUITests: XCTestCase {
             XCTAssertTrue(app.staticTexts[name].exists)
         }
         XCTAssertTrue(previewBanner.label.contains("sample accounts and usage figures"))
-        for (index, percent) in [72, 36, 88].enumerated() {
-            let usage = app.descendants(matching: .any).matching(identifier: "codexusageviewer.usage.account-\(index + 1)").firstMatch
-            XCTAssertTrue(usage.label.contains("\(percent) percent remaining"))
-        }
+        assertBothLimits(app)
         XCTAssertFalse(app.buttons["codexusageviewer.refresh"].isEnabled)
 
         app.buttons["codexusageviewer.preview"].click()
@@ -154,6 +151,7 @@ final class CodexUsageViewerUITests: XCTestCase {
         XCTAssertEqual(badge.label, "Logged In")
         XCTAssertTrue(plan.isHittable)
         XCTAssertTrue(badge.isHittable)
+        assertBothLimits(app)
 
         // Only Codex exposes credits and earned resets. Claude keeps its reported plan.
         for (index, expected) in [("125.5", "2"), ("0", "0"), ("Unlimited", "1")].enumerated() {
@@ -181,7 +179,7 @@ final class CodexUsageViewerUITests: XCTestCase {
         }
 
         let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Connected accounts with credits, available resets, and expiry dates"
+        screenshot.name = "Both usage limits with credits, available resets, and expiry dates"
         screenshot.lifetime = .keepAlways
         add(screenshot)
 
@@ -190,6 +188,22 @@ final class CodexUsageViewerUITests: XCTestCase {
         XCTAssertTrue(app.menuItems["All usage limits"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.menuItems["Rename account"].exists)
         app.typeKey(.escape, modifierFlags: [])
+    }
+
+    private func assertBothLimits(_ app: XCUIApplication) {
+        for (index, percentages) in [(72, 58), (36, 21), (88, 77)].enumerated() {
+            for (duration, label, percent) in [(300, "5-hour", percentages.0), (10_080, "Weekly", percentages.1)] {
+                let usage = app.descendants(matching: .any)
+                    .matching(identifier: "codexusageviewer.usage.\(duration).account-\(index + 1)").firstMatch
+                XCTAssertTrue(usage.isHittable, "Both limits should be visible without opening a sheet")
+                XCTAssertEqual(usage.label, "\(label), \(percent) percent remaining")
+                let reset = app.descendants(matching: .any)
+                    .matching(identifier: "codexusageviewer.reset.\(duration).account-\(index + 1)").firstMatch
+                XCTAssertTrue(reset.isHittable)
+                XCTAssertEqual(reset.label, "\(label) time until reset")
+            }
+            XCTAssertTrue(app.staticTexts["codexusageviewer.weeklyResetDate.account-\(index + 1)"].isHittable)
+        }
     }
 
     func testVersionInDashboardAndStandardQuitMenu() {

@@ -1,14 +1,28 @@
 import Foundation
 
 extension AccountSnapshot {
-    /// Weekly quota may occupy either slot; never substitute session usage.
-    var weeklyWindow: QuotaWindow? {
-        guard let bucket = primaryBucket else { return nil }
+    /// Keep the same shortest-to-longest order in the dashboard and widgets,
+    /// regardless of which slot the provider uses.
+    var usageWindows: [QuotaWindow] {
+        guard let bucket = primaryBucket else { return [] }
         return [bucket.primary, bucket.secondary].compactMap { $0 }
-            .first { $0.windowDurationMins == 10_080 }
+            .sorted { ($0.windowDurationMins ?? Int.max) < ($1.windowDurationMins ?? Int.max) }
     }
 
-    func weeklyUsage(at date: Date = .now) -> WeeklyUsageState {
+    var fiveHourWindow: QuotaWindow? {
+        usageWindows.first { $0.windowDurationMins == 300 }
+    }
+
+    /// Weekly quota may occupy either slot; never substitute session usage.
+    var weeklyWindow: QuotaWindow? {
+        usageWindows.first { $0.windowDurationMins == 10_080 }
+    }
+
+    func weeklyUsage(at date: Date = .now) -> QuotaUsageState {
+        usage(for: weeklyWindow, at: date)
+    }
+
+    func usage(for window: QuotaWindow?, at date: Date = .now) -> QuotaUsageState {
         switch state {
         case .disconnected: return .disconnected
         case .needsSignIn: return .needsSignIn
@@ -16,7 +30,7 @@ extension AccountSnapshot {
             guard issue == nil else { return .unavailable }
             guard updatedAt != nil else { return .waiting }
             guard !isStale(at: date) else { return .stale }
-            guard let window = weeklyWindow else { return .notReported }
+            guard let window else { return .notReported }
             guard window.usedPercent.isFinite, window.usedPercent >= 0 else { return .unavailable }
             guard !window.hasElapsed(at: date) else { return .resetElapsed }
             return .available(window)
@@ -24,7 +38,7 @@ extension AccountSnapshot {
     }
 }
 
-enum WeeklyUsageState: Equatable {
+enum QuotaUsageState: Equatable {
     case available(QuotaWindow)
     case disconnected, needsSignIn, waiting, stale, unavailable, notReported, resetElapsed
 
@@ -41,7 +55,7 @@ enum WeeklyUsageState: Equatable {
         case .waiting: return "Waiting for usage"
         case .stale: return "Usage out of date"
         case .unavailable: return "Update unavailable"
-        case .notReported: return "Weekly not reported"
+        case .notReported: return "Usage not reported"
         case .resetElapsed: return "Reset passed · refresh"
         }
     }
@@ -104,7 +118,8 @@ enum WeeklyWidgetTimeline {
             if staleAt > now && staleAt < reloadAt { dates.append(staleAt) }
         }
         for account in snapshot.accounts {
-            if let resetAt = account.weeklyWindow?.resetDate, resetAt > now && resetAt < reloadAt {
+            for resetAt in [account.fiveHourWindow, account.weeklyWindow].compactMap({ $0?.resetDate })
+                where resetAt > now && resetAt < reloadAt {
                 dates.append(resetAt)
             }
             if let expiry = account.resetCredits?.expiryDate, expiry > now && expiry < reloadAt {

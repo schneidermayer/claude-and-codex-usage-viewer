@@ -79,12 +79,58 @@ final class WeeklyUsageTests: XCTestCase {
         XCTAssertNil(WeeklyResetProgress(window: window, at: now))
     }
 
-    func testTimelineIncludesCountdownTicksStalenessAndWeeklyExpiryOnly() {
+    func testBothLimitsUseTheirDurationsAcrossProvidersAndSlots() {
+        let session = QuotaWindow(usedPercent: 85, windowDurationMins: 300, resetsAt: 1_900_009_000)
+        for provider in AccountProvider.allCases {
+            for reversed in [false, true] {
+                var value = account(primary: reversed ? weekly() : session, secondary: reversed ? session : weekly())
+                value.provider = provider
+                value.buckets[0].limitId = provider.rawValue
+                XCTAssertEqual(value.usageWindows, [session, weekly()])
+                XCTAssertEqual(value.fiveHourWindow, session)
+                XCTAssertEqual(value.usage(for: value.fiveHourWindow, at: now).window?.remainingPercent, 15)
+                XCTAssertEqual(value.weeklyUsage(at: now).window?.remainingPercent, 58)
+            }
+        }
+        XCTAssertNil(account(primary: weekly(), secondary: nil).fiveHourWindow)
+        var otherMeter = account(primary: weekly(), secondary: nil)
+        otherMeter.buckets.append(UsageBucket(limitId: "other", primary: session))
+        XCTAssertNil(otherMeter.fiveHourWindow, "Do not substitute a different meter's five-hour limit")
+    }
+
+    func testEachLimitExpiresIndependentlyWithoutAssumingRecovery() {
+        let session = QuotaWindow(usedPercent: 100, windowDurationMins: 300, resetsAt: 1_900_000_050)
+        var value = account(primary: session, secondary: weekly())
+        XCTAssertEqual(value.usage(for: value.fiveHourWindow, at: now).window?.remainingPercent, 0)
+        XCTAssertEqual(value.usage(for: value.fiveHourWindow, at: now.addingTimeInterval(50)), .resetElapsed)
+        XCTAssertEqual(value.weeklyUsage(at: now.addingTimeInterval(50)).window, weekly())
+        XCTAssertEqual(value.fiveHourWindow?.usedPercent, 100)
+
+        value.buckets[0].primary?.resetsAt = nil
+        value.buckets[0].secondary = weekly(seconds: 0)
+        XCTAssertEqual(value.usage(for: value.fiveHourWindow, at: now).window?.remainingPercent, 0)
+        XCTAssertEqual(value.weeklyUsage(at: now), .resetElapsed)
+        XCTAssertNil(value.fiveHourWindow.flatMap { QuotaResetProgress(window: $0, at: now) })
+
+        value.updatedAt = now.addingTimeInterval(-601)
+        XCTAssertEqual(value.usage(for: value.fiveHourWindow, at: now), .stale)
+        value.updatedAt = nil
+        XCTAssertEqual(value.usage(for: value.fiveHourWindow, at: now), .waiting)
+        value.updatedAt = now
+        value.issue = "Fixture error"
+        XCTAssertEqual(value.usage(for: value.fiveHourWindow, at: now), .unavailable)
+        value.issue = nil
+        value.buckets[0].primary?.usedPercent = .nan
+        XCTAssertEqual(value.usage(for: value.fiveHourWindow, at: now), .unavailable)
+    }
+
+    func testTimelineIncludesCountdownTicksStalenessAndBothExpiries() {
         let session = QuotaWindow(usedPercent: 8, windowDurationMins: 300, resetsAt: 1_900_000_050)
         let value = account(primary: session, secondary: weekly(seconds: 400))
         let snapshot = UsageSnapshot(accounts: [value], savedAt: now)
         let dates = WeeklyWidgetTimeline.dates(snapshot: snapshot, now: now, reloadAt: now.addingTimeInterval(900))
-        XCTAssertEqual(dates.map { Int($0.timeIntervalSince(now)) }, [0, 300, 400, 600, 601, 900])
+        XCTAssertEqual(dates.map { Int($0.timeIntervalSince(now)) }, [0, 50, 300, 400, 600, 601, 900])
+        XCTAssertEqual(value.usage(for: value.fiveHourWindow, at: now.addingTimeInterval(50)), .resetElapsed)
         XCTAssertEqual(value.weeklyUsage(at: now.addingTimeInterval(400)), .resetElapsed)
     }
 

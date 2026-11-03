@@ -380,59 +380,13 @@ private struct AccountCard: View {
 
     private func connectedContent(now: Date) -> some View {
         VStack(spacing: 0) {
-            if let bucket = account.primaryBucket, let primary = bucket.primary ?? bucket.secondary {
-                ZStack {
-                    CodexUsageViewerQuotaRing(remaining: primary.remainingPercent, accent: accent, lineWidth: 7)
-                        .frame(width: 130, height: 130)
-                    VStack(spacing: 1) {
-                        HStack(alignment: .firstTextBaseline, spacing: 1) {
-                            Text("\(primary.remainingPercent)")
-                                .font(.system(size: 39, weight: .medium, design: .rounded))
-                                .tracking(-1.5)
-                            Text("%")
-                                .font(.system(size: 16, weight: .medium, design: .rounded))
-                                .foregroundStyle(.secondary)
-                        }
-                        Text(isHistorical(primary, now: now) ? "last reported" : "remaining")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
+            if !account.usageWindows.isEmpty {
+                VStack(spacing: 10) {
+                    ForEach(Array(account.usageWindows.enumerated()), id: \.offset) { index, window in
+                        usageSummary(window, index: index, now: now)
                     }
                 }
-                .padding(.top, 21)
-                .padding(.bottom, 12)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(account.displayName), \(primary.label), \(primary.remainingPercent) percent remaining, last reported")
-                .accessibilityIdentifier("codexusageviewer.usage.\(account.id)")
-
-                resetTime(primary, label: "\(primary.label) reset", slot: "primary", now: now)
-                    .padding(.bottom, 17)
-
-                if let secondary = bucket.secondary, bucket.primary != nil {
-                    VStack(spacing: 7) {
-                        HStack {
-                            Text(secondary.label)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text("\(secondary.remainingPercent)% \(isHistorical(secondary, now: now) ? "reported" : "left")")
-                                .fontWeight(.medium)
-                        }
-                        .font(.system(size: 11))
-                        resetTime(secondary, label: "Resets in", slot: "secondary", now: now)
-                    }
-                } else {
-                    Group {
-                        if let resetDate = account.weeklyUsage(at: now).window?.resetDate {
-                            Text(resetDate, format: .dateTime.weekday(.wide).day().month(.wide).year().hour().minute())
-                        } else {
-                            Text("Weekly reset unavailable")
-                        }
-                    }
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("codexusageviewer.weeklyResetDate.\(account.id)")
-                }
+                .padding(.top, 18)
             } else {
                 VStack(spacing: 9) {
                     Image(systemName: "chart.bar.xaxis")
@@ -470,29 +424,67 @@ private struct AccountCard: View {
         }
     }
 
-    private func resetTime(_ window: QuotaWindow, label: String, slot: String, now: Date) -> some View {
-        let progress = isHistorical(window, now: now) ? nil : QuotaResetProgress(window: window, at: now)
-        let unavailable = window.hasElapsed(at: now) ? "Reset passed" :
-            (account.issue != nil || account.isStale(at: now) ? "Refresh to update" : "Unavailable")
-        return VStack(spacing: 7) {
-            HStack(spacing: 8) {
-                Text(label)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                Text(progress?.countdown ?? unavailable)
-                    .fontWeight(.medium)
+    private func usageSummary(_ window: QuotaWindow, index: Int, now: Date) -> some View {
+        let state = account.usage(for: window, at: now)
+        let progress = state.window.flatMap { QuotaResetProgress(window: $0, at: now) }
+        let key = window.windowDurationMins.map(String.init) ?? "window-\(index)"
+        return VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(window.label)
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(state.window == nil ? "Usage unknown" : "remaining")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                Text(state.window.map { "\($0.remainingPercent)%" } ?? "—")
+                    .font(.system(size: 30, weight: .medium, design: .rounded))
                     .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                    .foregroundStyle(state.window == nil ? Color.secondary : accent)
             }
-            .font(.system(size: 10))
-            CodexUsageViewerResetTrack(fractionRemaining: progress?.fractionRemaining, accent: accent,
-                                      segments: window.windowDurationMins == 10_080 ? 7 : 5)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(state.window.map { "\(window.label), \($0.remainingPercent) percent remaining" }
+                                 ?? "\(window.label) usage unknown. \(state.status ?? "")")
+            .accessibilityIdentifier("codexusageviewer.usage.\(key).\(account.id)")
+
+            VStack(spacing: 5) {
+                HStack {
+                    Text("Resets in")
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Text(progress?.countdown ?? (state.status ?? "Unavailable"))
+                        .fontWeight(.medium)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                .font(.system(size: 10))
+                CodexUsageViewerResetTrack(fractionRemaining: progress?.fractionRemaining, accent: accent,
+                                          segments: window.windowDurationMins == 10_080 ? 7 : 5,
+                                          height: 5, spacing: 3)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(window.label) time until reset")
+            .accessibilityValue(progress?.countdown ?? (state.status ?? "Unavailable"))
+            .accessibilityIdentifier("codexusageviewer.reset.\(key).\(account.id)")
+
+            if window.windowDurationMins == 10_080 {
+                Group {
+                    if let resetDate = state.window?.resetDate {
+                        Text(resetDate, format: .dateTime.weekday(.wide).day().month(.wide).year().hour().minute())
+                    } else {
+                        Text("Weekly reset unavailable")
+                    }
+                }
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("codexusageviewer.weeklyResetDate.\(account.id)")
+            }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(window.label) time until reset")
-        .accessibilityValue(progress.map { "\($0.countdown), \(Int(($0.fractionRemaining * 100).rounded())) percent of the window remaining" } ?? unavailable)
-        .accessibilityIdentifier("codexusageviewer.reset.\(slot).\(account.id)")
+        .padding(12)
+        .background(accent.opacity(colorScheme == .dark ? 0.055 : 0.04), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var disconnectedContent: some View {
@@ -549,14 +541,10 @@ private struct AccountCard: View {
     }
 
     private func status(now: Date) -> String {
-        if account.issue != nil { return "Update unavailable · last known usage" }
+        if account.issue != nil { return "Update unavailable · refresh to check" }
         if account.isStale(at: now) { return "Out of date · \(CodexUsageViewerFormatting.updated(account.updatedAt, now: now).lowercased())" }
-        if hasElapsedWindow(now: now) { return "Reset passed · last reported usage" }
+        if hasElapsedWindow(now: now) { return "Reset passed · refresh to check" }
         return CodexUsageViewerFormatting.updated(account.updatedAt, now: now)
-    }
-
-    private func isHistorical(_ window: QuotaWindow, now: Date) -> Bool {
-        account.issue != nil || account.isStale(at: now) || window.hasElapsed(at: now)
     }
 
     private func hasElapsedWindow(now: Date) -> Bool {

@@ -67,7 +67,8 @@ struct RenderWidgets {
         Sample data rendered through NSHostingView; no live-account, desktop-host, or timeline verification.
         Small: 170 × 170 pt; Large: 360 × 170 pt. Light and dark appearances.
 
-        Covers weekly quota slots, disconnected/stale/expired accounts, missing data, long names,
+        Covers five-hour and weekly quotas in either slot, independently expired limits,
+        single-window accounts, disconnected/stale accounts, missing reset times, long names,
         local-account icons, subscription tiers/fallbacks, zero/unknown/unlimited/expired resources,
         and one, two, or three accounts mixing Claude and Codex.
         """
@@ -170,8 +171,47 @@ struct RenderWidgets {
             allClaude.accounts[index].buckets[0].credits = nil
             allClaude.accounts[index].resetCredits = nil
         }
+        var oneCodex = connected
+        oneCodex.accounts = [connected.accounts[0]]
+        var sessionOnly = connected
+        for index in sessionOnly.accounts.indices {
+            sessionOnly.accounts[index].buckets[0].primary = connected.accounts[index].fiveHourWindow
+            sessionOnly.accounts[index].buckets[0].secondary = nil
+        }
+        var independentResets = connected
+        independentResets.accounts[0].buckets[0].primary?.resetsAt = Int(now.timeIntervalSince1970) - 1
+        independentResets.accounts[1].buckets[0].secondary?.resetsAt = Int(now.timeIntervalSince1970) - 1
+        independentResets.accounts[2].buckets[0].primary?.resetsAt = nil
+        independentResets.accounts[2].buckets[0].secondary?.resetsAt = nil
+        var dualExtremes = connected
+        for index in dualExtremes.accounts.indices {
+            dualExtremes.accounts[index].buckets[0].primary?.usedPercent = [0, 100, 0][index]
+            dualExtremes.accounts[index].buckets[0].secondary?.usedPercent = [100, 0, 0][index]
+        }
+        var mixedWindows = connected
+        for index in [0, 2] {
+            mixedWindows.accounts[index].buckets[0].primary = connected.accounts[index].weeklyWindow
+            mixedWindows.accounts[index].buckets[0].secondary = nil
+        }
+        // Weekly-only accounts followed by a dual-limit account, as in the desktop layout.
+        mixedWindows.accounts = [mixedWindows.accounts[0], mixedWindows.accounts[2], mixedWindows.accounts[1]]
+        var compactResources = connected
+        for index in compactResources.accounts.indices {
+            compactResources.accounts[index].provider = .codex
+            compactResources.accounts[index].buckets[0].limitId = "codex"
+            compactResources.accounts[index].plan = ["prolite", "pro", "promax"][index]
+            compactResources.accounts[index].buckets[0].credits = CreditBalance(
+                hasCredits: true, unlimited: false, balance: ["7100", "71000", "999999"][index])
+            compactResources.accounts[index].resetCredits = RateLimitResetCredits(availableCount: [3, 12, 999][index])
+        }
         return [
             ("connected", connected),
+            ("one-codex", oneCodex),
+            ("session-only", sessionOnly),
+            ("independent-resets", independentResets),
+            ("dual-extremes", dualExtremes),
+            ("mixed-windows", mixedWindows),
+            ("compact-resources", compactResources),
             ("one-claude", singleClaude),
             ("two-mixed", twoAccounts),
             ("three-claude", allClaude),

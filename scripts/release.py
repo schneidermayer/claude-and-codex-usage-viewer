@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tag, build, notarize, and publish a clean release. Requires NOTARY_PROFILE."""
+"""Tag, build, notarize, and publish using the repository's Keychain profile."""
 import argparse
 import hashlib
 import json
@@ -21,9 +21,9 @@ def main():
     args = parser.parse_args()
     if not RELEASE.fullmatch(args.version) or (ROOT / 'VERSION').read_text().strip() != args.version:
         parser.error('version must match the numeric VERSION file; commit the release changes first')
-    profile = os.environ.get('NOTARY_PROFILE')
+    profile = os.environ.get('NOTARY_PROFILE', '').strip() or (ROOT / 'Config/notary-profile.txt').read_text().strip()
     if not profile:
-        parser.error('set NOTARY_PROFILE to your existing notarytool Keychain profile')
+        parser.error('set Config/notary-profile.txt or NOTARY_PROFILE to your existing notarytool Keychain profile')
     if git(ROOT, 'status', '--porcelain'):
         parser.error('working tree must be clean')
     if not args.notes.is_file():

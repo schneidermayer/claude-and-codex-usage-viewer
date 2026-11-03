@@ -6,11 +6,11 @@ Native macOS app and widgets for one to three accounts in any mix of Claude and 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/widget-small.png">
-  <img src="docs/images/widget-small-light.png" width="255" alt="Small widget with three account columns and centered usage reset counts">
+  <img src="docs/images/widget-small-light.png" width="255" alt="Small widget with aligned weekly usage, a five-hour limit, provider icons, subtle account columns, and a single credits and resets row">
 </picture>
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/widget-large.png">
-  <img src="docs/images/widget-large-light.png" width="540" alt="Large widget showing usage, credits, earned resets, and countdowns">
+  <img src="docs/images/widget-large-light.png" width="540" alt="Large widget showing weekly and five-hour usage with separate reset countdowns, credits, and earned resets">
 </picture>
 
 *Layout previews with sample accounts.*
@@ -27,7 +27,9 @@ Select the appropriate Claude or Codex executable in Settings if detection fails
 
 A login helper refreshes every three minutes, including after quitting. Allow or disable it in **System Settings → General → Login Items & Extensions**; connection status appears in app Settings. macOS controls widget refresh timing.
 
-Widgets adapt to the configured one to three accounts, with provider labels, first names, and weekly usage remaining; bars and countdowns track the automatic reset. The computer marks the local Codex account; Ⓒ marks Codex credits and ↶ earned resets. Earned resets are separate from automatic resets. Codex Prolite/Pro/Promax display as 100/200/500; Claude plan names remain unchanged. Claude accounts show their five-hour and weekly usage when reported.
+The dashboard shows each reported limit in its own panel with usage remaining and a reset countdown. Widgets adapt to one to three accounts and show both five-hour and weekly limits when reported, with a separate reset bar and countdown for each. Small widgets label a pair of limits **5h** and **7d**; the bars track time until reset, not usage. Weekly-only accounts keep a larger percentage. The computer marks the local Codex account; Ⓒ marks Codex credits and ↶ earned resets. Earned resets are separate from automatic resets. Codex Prolite/Pro/Promax display as 100/200/500; Claude plan names remain unchanged.
+
+Small widgets align the weekly figures, reset bars, and countdowns across subtly shaded account columns. The provider icon sits beside the subscription, and credits and earned resets share one row. Credit balances use short forms such as **7.1k** and **71k**, rounded down; full values remain available in tooltips and accessibility labels.
 
 Missing data, expired limits, and data older than ten minutes are unknown. Widgets use compact resource values, — for unknown, and ∞ for unlimited credits; full identities and exact values remain available to accessibility and in tooltips. A reset timestamp never proves quota recovery.
 
@@ -56,9 +58,10 @@ Update `VERSION` and `docs/releases/<version>.md`, validate, and commit. From a 
 
 ```sh
 release_version=$(cat VERSION)
-NOTARY_PROFILE=your-keychain-profile \
-  python3 scripts/release.py "$release_version" --notes "docs/releases/$release_version.md"
+python3 scripts/release.py "$release_version" --notes "docs/releases/$release_version.md"
 ```
+
+Notarization uses the existing Keychain profile named in [Config/notary-profile.txt](Config/notary-profile.txt), currently `emoji-picker-macos-notary`. Set `NOTARY_PROFILE` to override it on another Mac.
 
 Publishes a signed, notarized universal ZIP and checksum. Tagged builds display `VERSION`; development builds append commits since the nearest numeric release tag. Never move a published tag.
 
