@@ -24,7 +24,6 @@ struct RenderWidgets {
                     let scheme: ColorScheme = dark ? .dark : .light
                     let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
                     let content = CodexUsageViewerWidgetContent(snapshot: snapshot, family: family, referenceDate: now)
-                        .padding(16)
                         .frame(width: size.width, height: size.height)
                         .background(Color(nsColor: dark
                                           ? NSColor(calibratedWhite: 0.12, alpha: 1)
@@ -94,6 +93,8 @@ struct RenderWidgets {
         var localMatch = connected
         localMatch.localCodexEmail = localMatch.accounts[0].email
         localMatch.localCodexCheckedAt = now
+        localMatch.localClaudeEmail = localMatch.accounts[1].email
+        localMatch.localClaudeCheckedAt = now
         localMatch.accounts[0].fullName = "Alexandra Weiss-Sommerfeld"
         localMatch.accounts[1].buckets[0].secondary = nil
         localMatch.accounts[2].buckets[0].primary?.resetsAt = nil
@@ -195,6 +196,10 @@ struct RenderWidgets {
         }
         // Weekly-only accounts followed by a dual-limit account, as in the desktop layout.
         mixedWindows.accounts = [mixedWindows.accounts[0], mixedWindows.accounts[2], mixedWindows.accounts[1]]
+        mixedWindows.localCodexEmail = mixedWindows.accounts[1].email
+        mixedWindows.localCodexCheckedAt = now
+        mixedWindows.localClaudeEmail = mixedWindows.accounts[2].email
+        mixedWindows.localClaudeCheckedAt = now
         var compactResources = connected
         for index in compactResources.accounts.indices {
             compactResources.accounts[index].provider = .codex

@@ -222,12 +222,15 @@ struct DashboardView: View {
                     .fixedSize()
                     .help("Each account connection stays on this Mac. Widgets receive usage snapshots, never credentials.")
             }
-            if !store.isDemo && !store.accounts.contains(where: { store.isLocalAccount($0) }) {
-                Label(store.localCodexStatus ?? "Checking the account signed in to local Codex…", systemImage: "desktopcomputer")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("codexusageviewer.localStatus")
+            ForEach(AccountProvider.allCases, id: \.self) { provider in
+                if !store.isDemo, store.accounts.contains(where: { $0.provider == provider }),
+                   !store.accounts.contains(where: { $0.provider == provider && store.isLocalAccount($0) }) {
+                    Label(store.localStatus(for: provider) ?? "Checking the account signed in to local \(provider.displayName)…", systemImage: "desktopcomputer")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier(provider == .codex ? "codexusageviewer.localStatus" : "codexusageviewer.localClaudeStatus")
+                }
             }
         }
     }
@@ -370,7 +373,7 @@ private struct AccountCard: View {
                     .accessibilityIdentifier("codexusageviewer.plan.\(account.id)")
             }
             if isLocalAccount() {
-                LocalCodexBadge()
+                LocalAccountBadge(provider: account.provider)
                     .accessibilityIdentifier("codexusageviewer.loggedIn.\(account.id)")
             }
             Spacer(minLength: 0)
@@ -387,6 +390,11 @@ private struct AccountCard: View {
                     }
                 }
                 .padding(.top, 18)
+                if let weekly = account.weeklyWindow {
+                    weeklyResetDate(weekly, now: now)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 9)
+                }
             } else {
                 VStack(spacing: 9) {
                     Image(systemName: "chart.bar.xaxis")
@@ -469,22 +477,47 @@ private struct AccountCard: View {
             .accessibilityValue(progress?.countdown ?? (state.status ?? "Unavailable"))
             .accessibilityIdentifier("codexusageviewer.reset.\(key).\(account.id)")
 
-            if window.windowDurationMins == 10_080 {
-                Group {
-                    if let resetDate = state.window?.resetDate {
-                        Text(resetDate, format: .dateTime.weekday(.wide).day().month(.wide).year().hour().minute())
-                    } else {
-                        Text("Weekly reset unavailable")
-                    }
-                }
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("codexusageviewer.weeklyResetDate.\(account.id)")
-            }
         }
         .padding(12)
-        .background(accent.opacity(colorScheme == .dark ? 0.055 : 0.04), in: RoundedRectangle(cornerRadius: 12))
+        .background {
+            usageBarBackground(remaining: state.window?.remainingPercent)
+        }
+    }
+
+    private func weeklyResetDate(_ window: QuotaWindow, now: Date) -> some View {
+        Group {
+            if let resetDate = account.usage(for: window, at: now).window?.resetDate {
+                Text(resetDate, format: .dateTime.weekday(.wide).day().month(.wide).year().hour().minute())
+            } else {
+                Text("Weekly reset unavailable")
+            }
+        }
+        .font(.system(size: 9))
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("codexusageviewer.weeklyResetDate.\(account.id)")
+    }
+
+    private func usageBarBackground(remaining: Int?) -> some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                accent.opacity(colorScheme == .dark ? 0.055 : 0.04)
+                if let remaining, remaining > 0 {
+                    accent.opacity(colorScheme == .dark ? 0.14 : 0.10)
+                        .frame(width: geometry.size.width * CGFloat(remaining) / 100)
+                        .overlay(alignment: .trailing) {
+                            if remaining < 100 {
+                                accent.opacity(colorScheme == .dark ? 0.24 : 0.18)
+                                    .frame(width: 0.5)
+                            }
+                        }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private var disconnectedContent: some View {
@@ -553,7 +586,8 @@ private struct AccountCard: View {
     }
 }
 
-struct LocalCodexBadge: View {
+struct LocalAccountBadge: View {
+    let provider: AccountProvider
     var body: some View {
         Label("Logged In", systemImage: "desktopcomputer")
             .font(.system(size: 9, weight: .medium))
@@ -562,10 +596,10 @@ struct LocalCodexBadge: View {
             .padding(.vertical, 4)
             .glassEffect(.regular, in: .capsule)
             .fixedSize()
-            .help("Currently signed in to local Codex")
+            .help("Currently signed in to local \(provider.displayName)")
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Logged In")
-            .accessibilityHint("Currently signed in to local Codex")
+            .accessibilityHint("Currently signed in to local \(provider.displayName)")
     }
 }
 

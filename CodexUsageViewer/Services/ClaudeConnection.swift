@@ -5,7 +5,7 @@ import LocalAuthentication
 import Security
 
 /// Claude Code owns browser sign-in, token renewal, and credential storage.
-/// Only this app's explicit CLAUDE_CONFIG_DIR is ever used.
+/// Account operations use an app-owned CLAUDE_CONFIG_DIR. Local identity uses only auth status.
 @MainActor
 final class ClaudeConnection: CodexAccountConnection {
     private let accountID: String
@@ -15,6 +15,7 @@ final class ClaudeConnection: CodexAccountConnection {
     private let loginTimeout: TimeInterval
     private let loadCredential: ((URL) async throws -> ClaudeOAuthCredential?)?
     private let fetchUsage: ((URLRequest) async throws -> (Data, HTTPURLResponse))?
+    private let localConfigDirectory: URL?
     private var processes: [UUID: ClaudeProcess] = [:]
     private var loginProcess: ClaudeProcess?
     private var loginID: String?
@@ -38,10 +39,35 @@ final class ClaudeConnection: CodexAccountConnection {
         self.loginTimeout = loginTimeout
         self.loadCredential = loadCredential
         self.fetchUsage = fetchUsage
+        self.localConfigDirectory = nil
+    }
+
+    private init(localIdentityExecutable: URL, configDirectory: URL, requestTimeout: TimeInterval) {
+        accountID = "local-identity"
+        executableURL = localIdentityExecutable
+        accountRoot = configDirectory
+        self.requestTimeout = requestTimeout
+        loginTimeout = 0
+        loadCredential = nil
+        fetchUsage = nil
+        localConfigDirectory = configDirectory
+    }
+
+    /// Ask the CLI for its default identity; never read or renew its credentials ourselves.
+    static func readLocalIdentity(executableURL: URL, configDirectory: URL? = nil,
+                                  requestTimeout: TimeInterval = 10) async throws -> CodexIdentity? {
+        let directory = configDirectory ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
+        let connection = ClaudeConnection(localIdentityExecutable: executableURL, configDirectory: directory,
+                                          requestTimeout: requestTimeout)
+        defer { connection.stop() }
+        return try await connection.account()
     }
 
     func account() async throws -> CodexIdentity? {
-        let directory = try prepareDirectory()
+        let directory = try localConfigDirectory ?? prepareDirectory()
         let result = try await run(["auth", "status", "--json"])
         return try Self.identity(from: result.data, expectedDirectory: directory, exitCode: result.status)
     }
@@ -71,6 +97,7 @@ final class ClaudeConnection: CodexAccountConnection {
     }
 
     func readLimits() async throws -> RateLimitsResponse {
+        guard localConfigDirectory == nil else { throw ClaudeConnectionError.readOnly }
         let attempt = generation
         let directory = try prepareDirectory()
         guard var credential = try await credential(in: directory) else { throw ClaudeConnectionError.signInRequired }
@@ -102,6 +129,7 @@ final class ClaudeConnection: CodexAccountConnection {
     }
 
     func beginLogin() async throws -> CodexLogin {
+        guard localConfigDirectory == nil else { throw ClaudeConnectionError.readOnly }
         guard loginProcess == nil else { throw ClaudeConnectionError.loginInProgress }
         // Verify directory isolation before allowing the CLI to write any credentials.
         _ = try await account()
@@ -185,6 +213,7 @@ final class ClaudeConnection: CodexAccountConnection {
     }
 
     func disconnect() async throws {
+        guard localConfigDirectory == nil else { throw ClaudeConnectionError.readOnly }
         if let loginID { await cancelLogin(loginID: loginID) }
         // Directory validation is also enforced before logout, so default credentials cannot be changed.
         _ = try await account()
@@ -224,7 +253,12 @@ final class ClaudeConnection: CodexAccountConnection {
     }
 
     private func start(_ arguments: [String], executable: URL? = nil, extraEnvironment: [String: String] = [:]) throws -> ClaudeProcess {
-        let directory = try prepareDirectory()
+        if localConfigDirectory != nil {
+            guard arguments == ["auth", "status", "--json"], executable == nil, extraEnvironment.isEmpty else {
+                throw ClaudeConnectionError.readOnly
+            }
+        }
+        let directory = try localConfigDirectory ?? prepareDirectory()
         let target = executable ?? executableURL
         let child = Process()
         var args = arguments
@@ -236,7 +270,9 @@ final class ClaudeConnection: CodexAccountConnection {
         }
         child.arguments = args
         child.currentDirectoryURL = directory
-        child.environment = Self.isolatedEnvironment(executableURL: executableURL, accountDirectory: directory)
+        child.environment = (localConfigDirectory == nil
+            ? Self.isolatedEnvironment(executableURL: executableURL, accountDirectory: directory)
+            : Self.localIdentityEnvironment(executableURL: executableURL))
             .merging(extraEnvironment) { _, new in new }
         let stdin = Pipe(), stdout = Pipe()
         child.standardInput = stdin
@@ -286,6 +322,7 @@ final class ClaudeConnection: CodexAccountConnection {
     }
 
     private func credential(in directory: URL) async throws -> ClaudeOAuthCredential? {
+        guard localConfigDirectory == nil else { throw ClaudeConnectionError.readOnly }
         if let loadCredential { return try await loadCredential(directory) }
         let service = Self.keychainService(for: directory)
         let result = try await run(["find-generic-password", "-a", Self.keychainAccount, "-w", "-s", service],
@@ -384,6 +421,16 @@ final class ClaudeConnection: CodexAccountConnection {
             + (inherited["PATH"] ?? "").split(separator: ":").map(String.init)
         var seen = Set<String>()
         environment["PATH"] = paths.filter { !$0.isEmpty && seen.insert($0).inserted }.joined(separator: ":")
+        return environment
+    }
+
+    static func localIdentityEnvironment(executableURL: URL,
+                                          inherited: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
+        var environment = isolatedEnvironment(executableURL: executableURL,
+                                               accountDirectory: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude"),
+                                               inherited: inherited)
+        // Setting CLAUDE_CONFIG_DIR would select scoped storage, even for the default path.
+        environment.removeValue(forKey: "CLAUDE_CONFIG_DIR")
         return environment
     }
 
@@ -497,11 +544,12 @@ enum ClaudeUsageParser {
 enum ClaudeConnectionError: LocalizedError, Equatable {
     case invalidAccount, unavailable, outdatedCLI, invalidResponse, subscriptionRequired, signInRequired
     case keychainUnavailable, network, stopped, timedOut, loginInProgress, loginFailed, logoutFailed
-    case invalidLoginCode, loginCodeMismatch, loginCodeAlreadySubmitted
+    case invalidLoginCode, loginCodeMismatch, loginCodeAlreadySubmitted, readOnly
     case http(Int)
     var errorDescription: String? {
         switch self {
         case .invalidAccount: return "This Claude account’s private sign-in folder is unavailable."
+        case .readOnly: return "The local Claude identity connection is read-only."
         case .unavailable: return "Claude Code could not start. Choose its executable in Settings."
         case .outdatedCLI: return "Update Claude Code to version 2.1.268 or later to use isolated accounts."
         case .invalidResponse: return "Claude returned an unreadable response. Update Claude Code and try again."

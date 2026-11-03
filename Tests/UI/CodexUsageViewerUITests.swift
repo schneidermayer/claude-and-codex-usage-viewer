@@ -13,6 +13,7 @@ final class CodexUsageViewerUITests: XCTestCase {
             + (loginCode ? ["--ui-testing-login-code"] : [])
         app.launch()
         XCTAssertTrue(app.staticTexts["codexusageviewer.title"].waitForExistence(timeout: 10))
+        app.activate()
         return app
     }
 
@@ -149,6 +150,10 @@ final class CodexUsageViewerUITests: XCTestCase {
         XCTAssertEqual(visibleText(fallbackPlan), "Subscription plan: Pro")
         XCTAssertEqual(visibleText(app.staticTexts["codexusageviewer.provider.account-2"]), "Claude")
         XCTAssertEqual(badge.label, "Logged In")
+        let claudeBadge = app.descendants(matching: .any).matching(identifier: "codexusageviewer.loggedIn.account-2").firstMatch
+        XCTAssertTrue(claudeBadge.waitForExistence(timeout: 3))
+        XCTAssertEqual(claudeBadge.label, "Logged In")
+        XCTAssertTrue(claudeBadge.isHittable)
         XCTAssertTrue(plan.isHittable)
         XCTAssertTrue(badge.isHittable)
         assertBothLimits(app)

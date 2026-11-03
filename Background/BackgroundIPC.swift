@@ -50,6 +50,7 @@ struct BackgroundState: Codable, Sendable {
     var helperVersion: String = CodexUsageViewerVersion.display
     var availableClaude: Bool = false
     var claudePath: String = ""
+    var localClaudeStatus: String? = nil
 }
 
 @MainActor

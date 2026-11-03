@@ -112,7 +112,8 @@ enum WeeklyWidgetTimeline {
             dates.append(tick)
             tick = tick.addingTimeInterval(5 * 60)
         }
-        let timestamps = snapshot.accounts.compactMap(\.updatedAt) + [snapshot.localCodexCheckedAt].compactMap { $0 }
+        let timestamps = snapshot.accounts.compactMap(\.updatedAt)
+            + [snapshot.localCodexCheckedAt, snapshot.localClaudeCheckedAt].compactMap { $0 }
         for timestamp in timestamps {
             let staleAt = timestamp.addingTimeInterval(CodexUsageViewerConstants.staleInterval + 1)
             if staleAt > now && staleAt < reloadAt { dates.append(staleAt) }

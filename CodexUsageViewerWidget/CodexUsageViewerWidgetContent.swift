@@ -11,26 +11,23 @@ struct CodexUsageViewerWidgetContent: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var isSmall: Bool { (family ?? environmentFamily) == .systemSmall }
-    private var accounts: [AccountSnapshot] {
-        Array(snapshot.accounts.prefix(3))
-    }
-    private var showsBothLimits: Bool {
-        accounts.contains { $0.fiveHourWindow != nil } && accounts.contains { $0.weeklyWindow != nil }
-    }
+    private var accounts: [AccountSnapshot] { Array(snapshot.accounts.prefix(3)) }
+    private var narrowColumns: Bool { isSmall && accounts.count == 3 }
+    private var nameHeight: CGFloat { narrowColumns ? 14 : 16 }
 
     var body: some View {
         GeometryReader { geometry in
-            let spacing: CGFloat = isSmall ? 4 : 12
+            let spacing: CGFloat = isSmall ? 4 : 8
             let count = max(1, accounts.count)
             let columnWidth = max(0, (geometry.size.width - CGFloat(count - 1) * spacing) / CGFloat(count))
             HStack(spacing: spacing) {
-                ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
+                ForEach(accounts) { account in
                     Group {
                         if isSmall {
-                            accountColumn(account, index: index)
+                            accountColumn(account, height: geometry.size.height)
                         } else {
                             Link(destination: accountURL(account)) {
-                                accountColumn(account, index: index)
+                                accountColumn(account, height: geometry.size.height)
                             }
                             .buttonStyle(.plain)
                         }
@@ -39,254 +36,178 @@ struct CodexUsageViewerWidgetContent: View {
                 }
             }
         }
+        .padding(.horizontal, isSmall ? 10 : 12)
+        .padding(.top, 10)
+        .padding(.bottom, isSmall ? 8 : 10)
         .fontDesign(.rounded)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Claude and Codex usage remaining and time until reset")
     }
 
-    private func accountColumn(_ account: AccountSnapshot, index: Int) -> some View {
+    private func accountColumn(_ account: AccountSnapshot, height: CGFloat) -> some View {
         let color = accent(CodexUsageViewerPalette.index(for: account.id))
+        let resourcesHeight: CGFloat = isSmall ? 14 : 17
+        let usageHeight = max(0, height - nameHeight - 2 - 16 - 4 - resourcesHeight - 3)
+        let hasBoth = account.fiveHourWindow != nil && account.weeklyWindow != nil
         return VStack(spacing: 0) {
-            HStack(spacing: 2) {
+            Text(widgetName(account))
+                .font(.system(size: narrowColumns ? 10.5 : 13, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(height: nameHeight)
+                .accessibilityLabel(account.displayName)
+                .help(account.displayName)
+
+            HStack(spacing: narrowColumns ? 1 : 3) {
+                subscription(account, color: color)
                 if snapshot.isLocalAccount(account, at: referenceDate) {
                     Image(systemName: "desktopcomputer")
-                        .font(.system(size: isSmall ? 7 : 10, weight: .semibold))
+                        .font(.system(size: narrowColumns ? 7 : 9, weight: .semibold))
                         .foregroundStyle(color)
                         .widgetAccentable()
                         .accessibilityLabel("Logged In")
+                        .help("Currently signed in to local \(account.provider.displayName)")
                 }
-                Text(widgetName(account))
-                    .font(.system(size: isSmall ? 10 : 13, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .accessibilityLabel(account.displayName)
-                    .help(account.displayName)
             }
-            .frame(height: showsBothLimits && isSmall ? 14 : 16)
+            .frame(maxWidth: .infinity)
+            .frame(height: 16)
+            .padding(.top, 2)
 
-            if isSmall {
-                subscription(account, color: color)
-                    .padding(.top, 3)
-            } else {
-                Text(account.provider.displayName)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(height: 11)
-            }
-
-            if showsBothLimits {
-                if !isSmall {
-                    subscription(account, color: color)
-                        .padding(.top, 2)
+            VStack(spacing: 4) {
+                if hasBoth {
+                    usagePanel(account, window: account.fiveHourWindow, color: color, compact: true)
+                        .frame(height: max(0, (usageHeight - 4) / 2))
+                    usagePanel(account, window: account.weeklyWindow, color: color, compact: true)
+                        .frame(height: max(0, (usageHeight - 4) / 2))
+                } else {
+                    usagePanel(account, window: account.weeklyWindow ?? account.fiveHourWindow,
+                               color: color, compact: false)
                 }
-                VStack(spacing: 0) {
-                    if isSmall {
-                        alignedSmallLimits(account, color: color)
-                    } else if account.fiveHourWindow != nil && account.weeklyWindow != nil {
-                        VStack(spacing: 4) {
-                            compactLimit(account, window: account.fiveHourWindow, label: "5h", fullLabel: "5-hour", color: color, segments: 5)
-                            compactLimit(account, window: account.weeklyWindow, label: "Weekly", fullLabel: "Weekly", color: color, segments: 7)
-                        }
-                    } else {
-                        singleLimit(account, color: color, compact: true)
+            }
+            .frame(height: usageHeight)
+            .padding(.top, 4)
+
+            Group {
+                if account.provider != .codex {
+                    Color.clear.accessibilityHidden(true)
+                } else if isSmall {
+                    smallResources(account)
+                } else {
+                    HStack(spacing: 3) {
+                        credits(account)
+                        Spacer(minLength: 0)
+                        availableResets(account)
                     }
                 }
-                .frame(height: isSmall ? 79 : 74)
-                .padding(.top, isSmall ? 4 : 2)
-            } else {
-                singleLimit(account, color: color)
             }
-
-            Spacer(minLength: showsBothLimits && !isSmall ? 4 : 5)
-
-            if account.provider != .codex {
-                Color.clear.frame(height: isSmall ? 14 : 17)
-                    .accessibilityHidden(true)
-            } else if isSmall {
-                smallResources(account)
-                    .frame(height: 14)
-            } else {
-                HStack(spacing: 3) {
-                    credits(account)
-                    Spacer(minLength: 0)
-                    availableResets(account)
-                }
-                .frame(height: 17)
-            }
+            .frame(height: resourcesHeight)
+            .padding(.top, 3)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background {
-            if isSmall {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(color.opacity(colorScheme == .dark ? 0.045 : 0.03))
-                    .padding(.vertical, -5)
-            }
-        }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
 
-    private func alignedSmallLimits(_ account: AccountSnapshot, color: Color) -> some View {
-        let hasSession = account.fiveHourWindow != nil
-        return VStack(spacing: 6) {
-            if hasSession {
-                compactLimit(account, window: account.fiveHourWindow, label: "5h", fullLabel: "5-hour",
-                             color: color, segments: 5, headlineHeight: 15)
-            } else {
-                Color.clear.frame(height: 32).accessibilityHidden(true)
-            }
-            if account.weeklyWindow != nil || !hasSession {
-                compactLimit(account, window: account.weeklyWindow, label: "7d", fullLabel: "Weekly",
-                             color: color, segments: 7, headlineHeight: 24, prominent: !hasSession)
-            } else {
-                Color.clear.frame(height: 41).accessibilityHidden(true)
-            }
-        }
-    }
-
     private func subscription(_ account: AccountSnapshot, color: Color) -> some View {
         HStack(spacing: 3) {
-            if isSmall {
-                CodexUsageViewerProviderMark(provider: account.provider)
-                    .fill(Color.primary)
-                    .frame(width: 9, height: 9)
-                    .accessibilityHidden(true)
-            }
+            CodexUsageViewerProviderMark(provider: account.provider)
+                .fill(Color.primary)
+                .frame(width: 9, height: 9)
+                .accessibilityHidden(true)
             Text(account.subscriptionDisplayName ?? "—")
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .minimumScaleFactor(0.75)
+                .layoutPriority(1)
         }
-            .font(.system(size: isSmall || !showsBothLimits ? 9 : 8, weight: .semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, isSmall ? 4 : 5)
-            .padding(.vertical, isSmall ? 2 : 1)
-            .background(color.opacity(0.13), in: Capsule())
-            .frame(height: isSmall ? 16 : (showsBothLimits ? 12 : 14))
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(account.provider.displayName), subscription plan: \(account.subscriptionDisplayName ?? "Unknown plan")")
-            .help("\(account.provider.displayName), subscription plan: \(account.subscriptionDisplayName ?? "Unknown plan")")
+        .font(.system(size: 9, weight: .semibold))
+        .foregroundStyle(color)
+        .padding(.horizontal, narrowColumns ? 3 : 4)
+        .padding(.vertical, 2)
+        .background(color.opacity(0.13), in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(account.provider.displayName), subscription plan: \(account.subscriptionDisplayName ?? "Unknown plan")")
+        .help("\(account.provider.displayName), subscription plan: \(account.subscriptionDisplayName ?? "Unknown plan")")
     }
 
-    private func compactLimit(_ account: AccountSnapshot, window: QuotaWindow?, label: String,
-                              fullLabel: String, color: Color, segments: Int,
-                              headlineHeight: CGFloat? = nil, prominent: Bool = false) -> some View {
+    private func usagePanel(_ account: AccountSnapshot, window: QuotaWindow?, color: Color,
+                            compact: Bool) -> some View {
         let state = account.usage(for: window, at: referenceDate)
         let reset = state.window.flatMap { QuotaResetProgress(window: $0, at: referenceDate) }
+        let session = window?.windowDurationMins == 300
+        let label = session ? "5h" : "7d"
+        let fullLabel = window?.label ?? "Usage"
+        let showLabel = compact || !isSmall || session
+        let size: CGFloat = compact ? (narrowColumns ? 14 : (isSmall ? 20 : 18)) : (narrowColumns ? 24 : (isSmall ? 30 : 32))
         let description = state.window.map { "\(fullLabel): \($0.remainingPercent) percent remaining" }
             ?? "\(fullLabel) usage unknown. \(state.status ?? "")"
         let resetDescription = reset.map { "Reset in \($0.countdown)" } ?? (state.status ?? "Reset time not reported")
-        return VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 1) {
-                if !prominent {
+        return VStack(spacing: 2) {
+            Spacer(minLength: 0)
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                if showLabel {
                     Text(label)
                         .font(.system(size: isSmall ? 8 : 10, weight: .medium))
                         .foregroundStyle(.secondary)
                         .fixedSize()
                 }
-                Spacer(minLength: 0)
-                HStack(alignment: .firstTextBaseline, spacing: 0) {
-                    Text(state.window.map { String($0.remainingPercent) } ?? "—")
-                        .font(.system(size: prominent ? 19.5 : (isSmall ? 12 : 18), weight: .semibold))
-                    if state.window != nil {
-                        Text("%")
-                            .font(.system(size: prominent ? 9 : (isSmall ? 8 : 11), weight: .medium))
-                    }
-                }
-                .monospacedDigit()
-                .foregroundStyle(state.window == nil ? Color.secondary : color)
-                .widgetAccentable()
-                if prominent { Spacer(minLength: 0) }
+                percentage(state, color: color, size: size, compact: compact)
+                    .frame(maxWidth: .infinity, alignment: showLabel ? .trailing : .center)
             }
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .fixedSize(horizontal: false, vertical: true)
-            .alignmentGuide(.bottom) { dimensions in
-                headlineHeight == nil ? dimensions[.bottom] : dimensions[.firstTextBaseline]
-            }
-            .frame(height: headlineHeight.map { $0 - 4 } ?? (isSmall ? 15 : 18),
-                   alignment: headlineHeight == nil ? .center : .bottom)
-            .padding(.bottom, headlineHeight == nil ? 0 : 4)
+            .frame(height: compact ? size + 4 : size + 5)
+            if !compact { Spacer(minLength: 0) }
             CodexUsageViewerResetTrack(fractionRemaining: reset?.fractionRemaining, accent: color,
-                                      segments: segments, height: 3, spacing: isSmall ? 1 : 2,
-                                      widgetAccentable: true)
-                .padding(.top, 2)
+                                      segments: session ? 5 : 7, height: 3,
+                                      spacing: isSmall ? 1 : 2, widgetAccentable: true)
             Text(reset?.countdown ?? compactResetStatus(state))
-                .font(.system(size: isSmall ? 8 : 10, weight: .medium))
+                .font(.system(size: isSmall ? 9 : 10, weight: .medium))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .minimumScaleFactor(0.75)
                 .frame(height: 11)
-                .padding(.top, 1)
         }
+        .padding(.horizontal, isSmall ? 3 : 6)
+        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background { columnFill(remaining: state.window?.remainingPercent, color: color) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(description). \(resetDescription)")
         .help("\(description). \(resetDescription)")
     }
 
-    private func singleLimit(_ account: AccountSnapshot, color: Color, compact: Bool = false) -> some View {
-        let window = account.weeklyWindow ?? account.fiveHourWindow
-        let label = window?.label ?? "Weekly"
-        let state = account.usage(for: window, at: referenceDate)
-        let reset = state.window.flatMap { QuotaResetProgress(window: $0, at: referenceDate) }
-        return Group {
-            HStack(alignment: .firstTextBaseline, spacing: 0) {
-                Text(state.window.map { String($0.remainingPercent) } ?? "—")
-                    .font(.system(size: isSmall ? 19.5 : 31, weight: .semibold))
-                    .monospacedDigit()
-                if state.window != nil {
-                    Text("%")
-                        .font(.system(size: isSmall ? 9 : 13, weight: .medium))
-                }
-            }
+    private func percentage(_ state: QuotaUsageState, color: Color, size: CGFloat,
+                            compact: Bool) -> some View {
+        let value = state.window.map { String($0.remainingPercent) } ?? "—"
+        let suffix = state.window == nil ? "" : "%"
+        let suffixSize: CGFloat = compact ? (isSmall ? 9 : 11) : (isSmall ? 10 : 13)
+        return Text("\(Text(value).font(.system(size: size, weight: .semibold)))\(Text(suffix).font(.system(size: suffixSize, weight: .medium)))")
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
             .foregroundStyle(state.window == nil ? Color.secondary : color)
             .widgetAccentable()
-            .fixedSize()
-            .frame(height: isSmall ? 30 : 36)
-            .padding(.top, 2)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(state.window.map { "\($0.remainingPercent) percent \(label.lowercased()) usage remaining" } ?? "\(label) usage unknown")
+    }
 
-            if !isSmall || window?.windowDurationMins == 300 {
-                Text(window?.windowDurationMins == 300 ? "5h" : "Weekly")
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(height: 10)
+    private func columnFill(remaining: Int?, color: Color) -> some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .bottom) {
+                color.opacity(colorScheme == .dark ? 0.045 : 0.03)
+                if let remaining, remaining > 0 {
+                    color.opacity(colorScheme == .dark ? 0.14 : 0.10)
+                        .frame(height: geometry.size.height * CGFloat(remaining) / 100)
+                        .overlay(alignment: .top) {
+                            if remaining < 100 {
+                                color.opacity(colorScheme == .dark ? 0.24 : 0.18)
+                                    .frame(height: 0.5)
+                            }
+                        }
+                }
             }
-
-            Spacer(minLength: 0)
-
-            if !compact && !isSmall { subscription(account, color: color) }
-
-            if state.window != nil {
-                CodexUsageViewerResetTrack(fractionRemaining: reset?.fractionRemaining,
-                                          accent: color, segments: window?.windowDurationMins == 300 ? 5 : 7,
-                                          height: compact ? 3 : 4, spacing: isSmall ? 1 : 3,
-                                          widgetAccentable: true)
-                    .padding(.top, compact ? 2 : 5)
-                Text(reset?.countdown ?? "—")
-                    .font(.system(size: isSmall ? 9 : 11, weight: .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(height: compact ? 11 : 14)
-                    .padding(.top, compact ? 1 : 3)
-                    .accessibilityLabel(reset.map { "\(label) reset in \($0.countdown)" } ?? "Reset time not reported")
-                    .help(reset.map { "\(label) reset in \($0.countdown)" } ?? "Reset time not reported")
-            } else {
-                Text(compactStatus(state))
-                    .font(.system(size: isSmall ? 9 : 10, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
-                    .frame(height: compact ? 17 : 26)
-                    .accessibilityLabel(state.status ?? "Usage unknown")
-                    .help(state.status ?? "Usage unknown")
-            }
-
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .widgetAccentable()
         }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private func smallResources(_ account: AccountSnapshot) -> some View {
@@ -297,6 +218,7 @@ struct CodexUsageViewerWidgetContent: View {
         // Size symbols and digits together; Text's minimumScaleFactor does not
         // reliably shrink interpolated symbols in a narrow widget column.
         return ViewThatFits(in: .horizontal) {
+            row.font(.system(size: 9, weight: .medium)).fixedSize()
             row.font(.system(size: 8, weight: .medium)).fixedSize()
             row.font(.system(size: 7, weight: .medium)).fixedSize()
             row.font(.system(size: 6, weight: .medium)).fixedSize()
@@ -365,19 +287,6 @@ struct CodexUsageViewerWidgetContent: View {
         case .stale: return "Stale"
         case .unavailable: return "Unavailable"
         case .resetElapsed: return "Refresh"
-        }
-    }
-
-    private func compactStatus(_ state: QuotaUsageState) -> String {
-        switch state {
-        case .disconnected: return "Connect\nin app"
-        case .needsSignIn: return "Sign in\nagain"
-        case .waiting: return "Waiting\nfor usage"
-        case .stale: return "Out of\ndate"
-        case .unavailable: return "Update\nunavailable"
-        case .notReported: return "Not\nreported"
-        case .resetElapsed: return "Refresh\nto check"
-        case .available: return "—"
         }
     }
 

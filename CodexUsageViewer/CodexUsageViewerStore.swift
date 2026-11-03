@@ -27,6 +27,7 @@ struct CodexUsageViewerStoreDependencies {
     var locateClaudeExecutable: (String?) -> URL? = { ClaudeConnection.locateExecutable(override: $0) }
     var makeClaudeConnection: (String, URL) -> any CodexAccountConnection = { ClaudeConnection(accountID: $0, executableURL: $1) }
     var claudeCredentialExists: (String) -> Bool = { ClaudeConnection.credentialExists(accountID: $0) }
+    var readLocalClaudeIdentity: (URL) async throws -> CodexIdentity? = { _ in nil }
     var removeCredentials: (String, AccountProvider) async throws -> Void = { _, _ in }
 
     static var live: Self {
@@ -41,6 +42,7 @@ struct CodexUsageViewerStoreDependencies {
                  return FileManager.default.fileExists(atPath: root.appendingPathComponent(id).appendingPathComponent("auth.json").path)
              }, discoverChromeProfiles: ChromeProfile.discover, now: Date.init,
              readLocalIdentity: { try await CodexConnection.readLocalIdentity(executableURL: $0) },
+             readLocalClaudeIdentity: { try await ClaudeConnection.readLocalIdentity(executableURL: $0) },
              removeCredentials: { id, provider in
                  // stop() terminates workers and escalates after one second. Let them exit before deleting sign-ins.
                  try await Task.sleep(for: .milliseconds(1_200))
@@ -63,6 +65,9 @@ final class CodexUsageViewerStore: ObservableObject {
     @Published private(set) var localCodexEmail: String?
     @Published private(set) var localCodexStatus: String?
     @Published private(set) var localCodexCheckedAt: Date?
+    @Published private(set) var localClaudeEmail: String?
+    @Published private(set) var localClaudeStatus: String?
+    @Published private(set) var localClaudeCheckedAt: Date?
     @Published var codexPath: String {
         didSet {
             guard !applyingBackgroundState else { return }
@@ -91,6 +96,10 @@ final class CodexUsageViewerStore: ObservableObject {
             }
             stopConnections(provider: .claude)
             availableClaude = dependencies.locateClaudeExecutable(claudePath) != nil
+            localClaudeEmail = nil
+            localClaudeCheckedAt = nil
+            localClaudeStatus = "Refresh to check the local Claude account."
+            localClaudeLookupID = UUID()
         }
     }
     @Published private(set) var availableCodex: Bool
@@ -118,13 +127,20 @@ final class CodexUsageViewerStore: ObservableObject {
     private var isChangingAccounts = false
     private var profileSelections: [String: String]
     private var localLookupID = UUID()
+    private var localClaudeLookupID = UUID()
 
     func isLocalAccount(_ account: AccountSnapshot) -> Bool {
         guard !isDemo else { return false }
         var snapshot = UsageSnapshot(accounts: accounts, savedAt: dependencies.now())
         snapshot.localCodexEmail = localCodexEmail
         snapshot.localCodexCheckedAt = localCodexCheckedAt
+        snapshot.localClaudeEmail = localClaudeEmail
+        snapshot.localClaudeCheckedAt = localClaudeCheckedAt
         return snapshot.isLocalAccount(account, at: dependencies.now())
+    }
+
+    func localStatus(for provider: AccountProvider) -> String? {
+        provider == .codex ? localCodexStatus : localClaudeStatus
     }
 
     var selectedChromeProfileID: String {
@@ -208,6 +224,8 @@ final class CodexUsageViewerStore: ObservableObject {
         liveAccounts = cached
         localCodexEmail = cachedSnapshot.localCodexEmail
         localCodexCheckedAt = cachedSnapshot.localCodexCheckedAt
+        localClaudeEmail = cachedSnapshot.localClaudeEmail
+        localClaudeCheckedAt = cachedSnapshot.localClaudeCheckedAt
         if arguments.contains("--demo") {
             isDemo = true
             accounts = UsageSnapshot.preview.accounts
@@ -218,6 +236,8 @@ final class CodexUsageViewerStore: ObservableObject {
             isDemo = false
             localCodexEmail = accounts.first?.email
             localCodexCheckedAt = dependencies.now()
+            localClaudeEmail = accounts.first(where: { $0.provider == .claude })?.email
+            localClaudeCheckedAt = dependencies.now()
         }
         if isUITesting && arguments.contains("--ui-testing-login-code") {
             accounts = [AccountSnapshot(id: "account-1", name: "Account", provider: .claude)]
@@ -227,6 +247,7 @@ final class CodexUsageViewerStore: ObservableObject {
                                  isWaiting: true, attemptID: "fixture-attempt")
         }
         updateLocalCodexMatchStatus()
+        updateLocalClaudeMatchStatus()
         if startsPolling && !isUITesting {
             pollTask = Task { [weak self] in
                 await self?.backgroundService?.registerIfNeeded()
@@ -306,6 +327,7 @@ final class CodexUsageViewerStore: ObservableObject {
             profileSelections.removeValue(forKey: id)
             if managesChromeProfiles { preferences.set(profileSelections, forKey: "chromeProfiles") }
             updateLocalCodexMatchStatus()
+            updateLocalClaudeMatchStatus()
             persist()
         } catch { errorMessage = "Couldn’t remove account: \(error.localizedDescription)" }
     }
@@ -318,13 +340,16 @@ final class CodexUsageViewerStore: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
         async let localRefresh: Void = refreshLocalCodexIdentity()
+        async let localClaudeRefresh: Void = refreshLocalClaudeIdentity()
         for id in accounts.map(\.id) {
             guard let account = accounts.first(where: { $0.id == id }),
                   account.state != .disconnected, login?.id != id else { continue }
             await refreshAccount(id)
         }
         await localRefresh
+        await localClaudeRefresh
         updateLocalCodexMatchStatus()
+        updateLocalClaudeMatchStatus()
         persist()
     }
 
@@ -370,10 +395,60 @@ final class CodexUsageViewerStore: ObservableObject {
             localCodexStatus = "Refresh to check the local Codex account."
             return
         }
-        if let account = accounts.first(where: { isLocalAccount($0) }) {
+        if let account = accounts.first(where: { $0.provider == .codex && isLocalAccount($0) }) {
             localCodexStatus = "Local Codex is using \(account.displayName)."
         } else {
             localCodexStatus = "Local Codex uses an account that isn’t connected here."
+        }
+    }
+
+    private func refreshLocalClaudeIdentity() async {
+        guard !stopped, !isDemo, !isUITesting else { return }
+        guard accounts.contains(where: { $0.provider == .claude }) else { return }
+        let lookup = UUID()
+        localClaudeLookupID = lookup
+        guard let executable = dependencies.locateClaudeExecutable(claudePath) else {
+            localClaudeEmail = nil
+            localClaudeCheckedAt = nil
+            localClaudeStatus = "Choose the Claude CLI to detect your local account."
+            return
+        }
+        do {
+            let identity = try await dependencies.readLocalClaudeIdentity(executable)
+            guard localClaudeLookupID == lookup, !stopped, !isDemo else { return }
+            localClaudeCheckedAt = dependencies.now()
+            guard let identity else {
+                localClaudeEmail = nil
+                localClaudeStatus = "Local Claude isn’t signed in."
+                return
+            }
+            guard identity.type == "claude", let email = identity.email?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty else {
+                localClaudeEmail = nil
+                localClaudeStatus = "Local Claude didn’t return a subscription account email."
+                return
+            }
+            localClaudeEmail = email
+            updateLocalClaudeMatchStatus()
+        } catch {
+            guard localClaudeLookupID == lookup else { return }
+            localClaudeEmail = nil
+            localClaudeCheckedAt = nil
+            localClaudeStatus = "Local Claude identity couldn’t be read. Refresh to try again."
+        }
+    }
+
+    private func updateLocalClaudeMatchStatus() {
+        guard !isDemo else { localClaudeStatus = nil; return }
+        guard localClaudeEmail != nil, let checkedAt = localClaudeCheckedAt else { return }
+        let age = dependencies.now().timeIntervalSince(checkedAt)
+        guard age >= -60, age <= CodexUsageViewerConstants.staleInterval else {
+            localClaudeStatus = "Refresh to check the local Claude account."
+            return
+        }
+        if let account = accounts.first(where: { $0.provider == .claude && isLocalAccount($0) }) {
+            localClaudeStatus = "Local Claude is using \(account.displayName)."
+        } else {
+            localClaudeStatus = "Local Claude uses an account that isn’t connected here."
         }
     }
 
@@ -448,7 +523,8 @@ final class CodexUsageViewerStore: ObservableObject {
                     accounts[index] = AccountSnapshot(id: accountID, name: accounts[index].name, state: .needsSignIn, provider: accounts[index].provider)
                 }
                 await refreshAccount(accountID)
-                await refreshLocalCodexIdentity()
+                if account.provider == .claude { await refreshLocalClaudeIdentity() }
+                else { await refreshLocalCodexIdentity() }
                 persist()
                 if accounts.first(where: { $0.id == accountID })?.isConnected == true {
                     login = nil
@@ -555,6 +631,7 @@ final class CodexUsageViewerStore: ObservableObject {
             connections.removeValue(forKey: accountID)
             accounts[index] = AccountSnapshot(id: accountID, name: accounts[index].name, provider: accounts[index].provider)
             updateLocalCodexMatchStatus()
+            updateLocalClaudeMatchStatus()
             persist()
         } catch { errorMessage = "Couldn’t disconnect: \(error.localizedDescription)" }
     }
@@ -569,6 +646,7 @@ final class CodexUsageViewerStore: ObservableObject {
         }
         isDemo = enabled
         updateLocalCodexMatchStatus()
+        updateLocalClaudeMatchStatus()
     }
 
     func openDashboard() {
@@ -582,6 +660,7 @@ final class CodexUsageViewerStore: ObservableObject {
         background?.shutdown()
         loginTask?.cancel()
         localLookupID = UUID()
+        localClaudeLookupID = UUID()
         connections.values.forEach { $0.stop() }
     }
 
@@ -608,6 +687,9 @@ final class CodexUsageViewerStore: ObservableObject {
             localCodexEmail = state.snapshot.localCodexEmail
             localCodexCheckedAt = state.snapshot.localCodexCheckedAt
             localCodexStatus = state.localCodexStatus
+            localClaudeEmail = state.snapshot.localClaudeEmail
+            localClaudeCheckedAt = state.snapshot.localClaudeCheckedAt
+            localClaudeStatus = state.localClaudeStatus
             isRefreshing = state.isRefreshing
             busyAccountIDs = Set(state.busyAccountIDs)
             login = state.login
@@ -640,11 +722,13 @@ final class CodexUsageViewerStore: ObservableObject {
         var snapshot = UsageSnapshot(accounts: accounts, savedAt: dependencies.now())
         snapshot.localCodexEmail = localCodexEmail
         snapshot.localCodexCheckedAt = localCodexCheckedAt
+        snapshot.localClaudeEmail = localClaudeEmail
+        snapshot.localClaudeCheckedAt = localClaudeCheckedAt
         return BackgroundState(snapshot: snapshot, isRefreshing: isRefreshing,
                                busyAccountIDs: Array(busyAccountIDs), login: login,
                                availableCodex: availableCodex, localCodexStatus: localCodexStatus,
                                errorMessage: errorMessage, codexPath: codexPath,
-                               availableClaude: availableClaude, claudePath: claudePath)
+                               availableClaude: availableClaude, claudePath: claudePath, localClaudeStatus: localClaudeStatus)
     }
 
     private func persist() {
@@ -654,6 +738,8 @@ final class CodexUsageViewerStore: ObservableObject {
             var snapshot = UsageSnapshot(accounts: accounts, savedAt: dependencies.now())
             snapshot.localCodexEmail = localCodexEmail
             snapshot.localCodexCheckedAt = localCodexCheckedAt
+            snapshot.localClaudeEmail = localClaudeEmail
+            snapshot.localClaudeCheckedAt = localClaudeCheckedAt
             try dependencies.saveSnapshot(snapshot)
             dependencies.reloadWidgets()
         } catch { errorMessage = error.localizedDescription }

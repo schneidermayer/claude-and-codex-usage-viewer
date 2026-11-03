@@ -94,6 +94,9 @@ final class BackgroundStoreTests: XCTestCase {
                 readLocalIdentity: { [unowned self] _ in
                     localIdentityReads += 1
                     return nil
+                }, readLocalClaudeIdentity: { [unowned self] _ in
+                    localIdentityReads += 1
+                    return nil
                 })
             store = CodexUsageViewerStore(dependencies: dependencies, preferences: preferences, background: background)
         }
@@ -143,6 +146,10 @@ final class BackgroundStoreTests: XCTestCase {
         harness.background.state.snapshot.accounts[0].updatedAt = harness.now
         harness.background.state.snapshot.localCodexEmail = "FRESH@fixture.test"
         harness.background.state.snapshot.localCodexCheckedAt = harness.now
+        harness.background.state.snapshot.accounts[1] = AccountSnapshot(id: "account-2", name: "Claude", email: "claude@fixture.test", state: .connected, provider: .claude)
+        harness.background.state.snapshot.localClaudeEmail = "CLAUDE@fixture.test"
+        harness.background.state.snapshot.localClaudeCheckedAt = harness.now
+        harness.background.state.localClaudeStatus = "Local Claude fixture"
         harness.background.state.isRefreshing = true
         harness.background.state.busyAccountIDs = ["account-1"]
         harness.background.state.codexPath = "/fixture/new-codex"
@@ -152,6 +159,9 @@ final class BackgroundStoreTests: XCTestCase {
         XCTAssertEqual(harness.store.accounts[0].email, "fresh@fixture.test")
         XCTAssertEqual(harness.store.localCodexCheckedAt, harness.now)
         XCTAssertTrue(harness.store.isLocalAccount(harness.store.accounts[0]))
+        XCTAssertTrue(harness.store.isLocalAccount(harness.store.accounts[1]))
+        XCTAssertEqual(harness.store.localClaudeCheckedAt, harness.now)
+        XCTAssertEqual(harness.store.localClaudeStatus, "Local Claude fixture")
         XCTAssertTrue(harness.store.isRefreshing)
         XCTAssertEqual(harness.store.busyAccountIDs, ["account-1"])
         XCTAssertFalse(harness.store.availableCodex)

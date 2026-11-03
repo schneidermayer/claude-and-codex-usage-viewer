@@ -144,4 +144,17 @@ final class WeeklyUsageTests: XCTestCase {
         XCTAssertEqual(value.resetsValue(at: now.addingTimeInterval(120)), .unknown)
         XCTAssertEqual(value.weeklyUsage(at: now.addingTimeInterval(120)).window, weekly())
     }
+
+    func testTimelineExpiresLocalClaudeIdentityIndependently() {
+        var value = account(primary: nil, secondary: weekly())
+        value.provider = .claude
+        value.email = "claude@fixture.test"
+        var snapshot = UsageSnapshot(accounts: [value], savedAt: now)
+        snapshot.localClaudeEmail = value.email
+        snapshot.localClaudeCheckedAt = now.addingTimeInterval(-599)
+        let dates = WeeklyWidgetTimeline.dates(snapshot: snapshot, now: now, reloadAt: now.addingTimeInterval(60))
+        XCTAssertEqual(dates.map { Int($0.timeIntervalSince(now)) }, [0, 2, 60])
+        XCTAssertTrue(snapshot.isLocalAccount(value, at: now.addingTimeInterval(1)))
+        XCTAssertFalse(snapshot.isLocalAccount(value, at: now.addingTimeInterval(2)))
+    }
 }

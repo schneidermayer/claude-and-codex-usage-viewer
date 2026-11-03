@@ -6,11 +6,11 @@ Native macOS app and widgets for one to three accounts in any mix of Claude and 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/widget-small.png">
-  <img src="docs/images/widget-small-light.png" width="255" alt="Small widget with aligned weekly usage, a five-hour limit, provider icons, subtle account columns, and a single credits and resets row">
+  <img src="docs/images/widget-small-light.png" width="255" alt="Compact small widget with larger usage figures, equal five-hour and weekly panels, provider and subscription badges, and local Claude and Codex indicators">
 </picture>
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/widget-large.png">
-  <img src="docs/images/widget-large-light.png" width="540" alt="Large widget showing weekly and five-hour usage with separate reset countdowns, credits, and earned resets">
+  <img src="docs/images/widget-large-light.png" width="540" alt="Wide widget with compact account headers, local Claude and Codex indicators, usage fills, separate reset countdowns, credits, and earned resets">
 </picture>
 
 *Layout previews with sample accounts.*
@@ -27,9 +27,9 @@ Select the appropriate Claude or Codex executable in Settings if detection fails
 
 A login helper refreshes every three minutes, including after quitting. Allow or disable it in **System Settings → General → Login Items & Extensions**; connection status appears in app Settings. macOS controls widget refresh timing.
 
-The dashboard shows each reported limit in its own panel with usage remaining and a reset countdown. Widgets adapt to one to three accounts and show both five-hour and weekly limits when reported, with a separate reset bar and countdown for each. Small widgets label a pair of limits **5h** and **7d**; the bars track time until reset, not usage. Weekly-only accounts keep a larger percentage. The computer marks the local Codex account; Ⓒ marks Codex credits and ↶ earned resets. Earned resets are separate from automatic resets. Codex Prolite/Pro/Promax display as 100/200/500; Claude plan names remain unchanged.
+The dashboard shows each reported limit in its own panel, filled from left to right with its remaining percentage, alongside a reset countdown. Widgets adapt to one to three accounts and show both five-hour and weekly limits when reported, with a separate reset bar and countdown for each. Each widget column fills from the bottom to show its remaining percentage. Accounts with both limits have two filled panels: five-hour above, weekly below. Unknown or expired usage has no fill. The segmented tracks show time until reset; **5h** and **7d** identify the periods. Single-limit accounts keep a larger percentage. The computer marks a confirmed match to the default local Claude or Codex account; Ⓒ marks Codex credits and ↶ earned resets. Earned resets are separate from automatic resets. Codex Prolite/Pro/Promax display as 100/200/500; Claude plan names remain unchanged.
 
-Small widgets align the weekly figures, reset bars, and countdowns across subtly shaded account columns. The provider icon sits beside the subscription, and credits and earned resets share one row. Credit balances use short forms such as **7.1k** and **71k**, rounded down; full values remain available in tooltips and accessibility labels.
+Both widget sizes use compact outer margins and place the provider icon, subscription, and local-account indicator together below the name. Paired five-hour and weekly bars have equal sizes, with the reset tracks inset from their edges. Single-limit figures sit within the full panel, while weekly reset tracks and countdowns align at the bottom of neighboring columns. Credits and earned resets sit below the bars and share one row in Small. Credit balances use short forms such as **7.1k** and **71k**, rounded down; full values remain available in tooltips and accessibility labels.
 
 Missing data, expired limits, and data older than ten minutes are unknown. Widgets use compact resource values, — for unknown, and ∞ for unlimited credits; full identities and exact values remain available to accessibility and in tooltips. A reset timestamp never proves quota recovery.
 
@@ -71,6 +71,6 @@ Codex credentials stay in private app-owned `CODEX_HOME` directories under `~/Li
 
 Uses [Codex app-server](https://learn.chatgpt.com/docs/app-server#auth-endpoints) account methods without inference. The default local identity is read through `account/read`, without login, logout, or token refresh. Names come only from app-owned logins matched to the official account email, with email fallback.
 
-Claude sign-in and identity use Claude Code’s [authentication commands and isolated account directories](https://code.claude.com/docs/en/authentication#log-in-with-multiple-accounts), requiring version 2.1.268 or later. Token renewal uses the CLI’s [refresh-token environment variables](https://code.claude.com/docs/en/env-vars). Usage is read from Anthropic’s OAuth usage endpoint using only that account’s app-owned credentials. This usage endpoint is not a documented stable public API; unavailable or changed responses remain unknown. The app never reads the normal Claude account’s credentials.
+Claude sign-in and identity use Claude Code’s [authentication commands and isolated account directories](https://code.claude.com/docs/en/authentication#log-in-with-multiple-accounts), requiring version 2.1.268 or later. Token renewal uses the CLI’s [refresh-token environment variables](https://code.claude.com/docs/en/env-vars). Usage is read from Anthropic’s OAuth usage endpoint using only that account’s app-owned credentials. This usage endpoint is not a documented stable public API; unavailable or changed responses remain unknown. Local Claude detection uses only the CLI’s [`auth status --json` command](https://code.claude.com/docs/en/cli-reference), validates the reported default directory, and matches the returned email to a connected Claude account. It never reads the normal Claude account’s credential files or Keychain values directly, or logs in, logs out, or renews its tokens. Local badges expire when their identity checks become stale.
 
 The app keeps its original bundle identifiers and storage paths so existing Codex sign-ins, preferences, and desktop widgets survive the rename. Legacy three-account configurations are preserved; new installations start with one account.

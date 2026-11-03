@@ -199,5 +199,30 @@ final class UsageModelsTests: XCTestCase {
         let legacy = try JSONDecoder().decode(UsageSnapshot.self, from: Data(#"{"version":1,"accounts":[],"savedAt":0}"#.utf8))
         XCTAssertNil(legacy.localCodexEmail)
         XCTAssertNil(legacy.localCodexCheckedAt)
+        XCTAssertNil(legacy.localClaudeEmail)
+        XCTAssertNil(legacy.localClaudeCheckedAt)
+    }
+
+    func testClaudeAndCodexLocalMatchesStayIndependentAndRoundTrip() throws {
+        let now = Date(timeIntervalSince1970: 1_900_000_000)
+        var snapshot = UsageSnapshot.preview
+        snapshot.accounts[0].email = "shared@fixture.test"
+        snapshot.accounts[1].email = "shared@fixture.test"
+        snapshot.localCodexEmail = "shared@fixture.test"
+        snapshot.localCodexCheckedAt = now
+        XCTAssertTrue(snapshot.isLocalAccount(snapshot.accounts[0], at: now))
+        XCTAssertFalse(snapshot.isLocalAccount(snapshot.accounts[1], at: now))
+        snapshot.localClaudeEmail = " SHARED@FIXTURE.TEST "
+        snapshot.localClaudeCheckedAt = now.addingTimeInterval(-590)
+        XCTAssertTrue(snapshot.isLocalAccount(snapshot.accounts[1], at: now))
+        let decoded = try JSONDecoder().decode(UsageSnapshot.self, from: JSONEncoder().encode(snapshot))
+        XCTAssertEqual(decoded, snapshot)
+        XCTAssertTrue(decoded.isLocalAccount(decoded.accounts[0], at: now.addingTimeInterval(11)))
+        XCTAssertFalse(decoded.isLocalAccount(decoded.accounts[1], at: now.addingTimeInterval(11)))
+        snapshot.localClaudeCheckedAt = now.addingTimeInterval(61)
+        XCTAssertFalse(snapshot.isLocalAccount(snapshot.accounts[1], at: now))
+        snapshot.localClaudeCheckedAt = now
+        snapshot.accounts[1].state = .needsSignIn
+        XCTAssertFalse(snapshot.isLocalAccount(snapshot.accounts[1], at: now))
     }
 }

@@ -293,13 +293,17 @@ struct UsageSnapshot: Codable, Equatable, Sendable {
     var savedAt: Date
     var localCodexEmail: String? = nil
     var localCodexCheckedAt: Date? = nil
+    var localClaudeEmail: String? = nil
+    var localClaudeCheckedAt: Date? = nil
     func isLocalAccount(_ account: AccountSnapshot, at date: Date = .now) -> Bool {
-        guard account.provider == .codex, account.isConnected, let email = account.email, let localCodexEmail,
-              let checkedAt = localCodexCheckedAt,
+        let local = account.provider == .codex
+            ? (localCodexEmail, localCodexCheckedAt) : (localClaudeEmail, localClaudeCheckedAt)
+        guard account.isConnected, let email = account.email, let localIdentityEmail = local.0,
+              let checkedAt = local.1,
               date.timeIntervalSince(checkedAt) <= CodexUsageViewerConstants.staleInterval,
               date.timeIntervalSince(checkedAt) >= -60 else { return false }
         let accountEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        let localEmail = localCodexEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        let localEmail = localIdentityEmail.trimmingCharacters(in: .whitespacesAndNewlines)
         return !accountEmail.isEmpty && !localEmail.isEmpty && accountEmail.caseInsensitiveCompare(localEmail) == .orderedSame
     }
     static var empty: UsageSnapshot { UsageSnapshot(accounts: [AccountSnapshot.emptyAccounts[0]], savedAt: .now) }

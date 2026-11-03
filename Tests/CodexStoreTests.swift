@@ -73,6 +73,9 @@ final class CodexStoreTests: XCTestCase {
         var localIdentity: CodexIdentity?
         var localReadHandler: (() async throws -> CodexIdentity?)?
         var localReadCalls = 0
+        var localClaudeIdentity: CodexIdentity?
+        var localClaudeReadHandler: (() async throws -> CodexIdentity?)?
+        var localClaudeReadCalls = 0
         var workers: [String: StoreConnectionFixture] = [:]
         var saved: [UsageSnapshot] = []
         var widgetReloads = 0
@@ -104,6 +107,11 @@ final class CodexStoreTests: XCTestCase {
                     return localIdentity
                 }, locateClaudeExecutable: { _ in URL(fileURLWithPath: "/fixture/claude") },
                 makeClaudeConnection: { [unowned self] _, _ in claudeWorker }, claudeCredentialExists: { _ in false },
+                readLocalClaudeIdentity: { [unowned self] _ in
+                    localClaudeReadCalls += 1
+                    if let localClaudeReadHandler { return try await localClaudeReadHandler() }
+                    return localClaudeIdentity
+                },
                 removeCredentials: { [unowned self] id, provider in
                     try await removeHandler?()
                     removedCredentials.append((id, provider))
@@ -444,6 +452,69 @@ final class CodexStoreTests: XCTestCase {
         XCTAssertEqual(harness.store.accounts[0].displayName, "different@fixture.test")
     }
 
+    func testLocalClaudeBadgePublishesSeparatelyFromCodexAndClearsOnFailure() async {
+        let harness = Harness()
+        defer { harness.finish() }
+        harness.store.accounts[1] = AccountSnapshot(id: "account-2", name: "Claude", email: "claude@fixture.test", state: .connected, provider: .claude)
+        harness.claudeWorker.identity = CodexIdentity(email: "claude@fixture.test", planType: "pro", type: "claude")
+        harness.localIdentity = harness.worker.identity
+        harness.localClaudeIdentity = CodexIdentity(email: "CLAUDE@FIXTURE.TEST", planType: "pro", type: "claude")
+        await harness.store.refresh()
+        XCTAssertTrue(harness.store.isLocalAccount(harness.store.accounts[0]))
+        XCTAssertTrue(harness.store.isLocalAccount(harness.store.accounts[1]))
+        XCTAssertEqual(harness.saved.last?.localClaudeEmail, "CLAUDE@FIXTURE.TEST")
+        XCTAssertEqual(harness.saved.last?.localClaudeCheckedAt, harness.now)
+        XCTAssertEqual(harness.store.backgroundState.snapshot.localClaudeEmail, "CLAUDE@FIXTURE.TEST")
+        XCTAssertEqual(harness.store.backgroundState.localClaudeStatus, "Local Claude is using claude@fixture.test.")
+        harness.localClaudeIdentity = CodexIdentity(email: "different@fixture.test", planType: nil, type: "claude")
+        await harness.store.refresh()
+        XCTAssertFalse(harness.store.isLocalAccount(harness.store.accounts[1]))
+        XCTAssertTrue(harness.store.isLocalAccount(harness.store.accounts[0]))
+        XCTAssertEqual(harness.store.localClaudeStatus, "Local Claude uses an account that isn’t connected here.")
+        harness.localClaudeIdentity = nil
+        await harness.store.refresh()
+        XCTAssertNil(harness.store.localClaudeEmail)
+        XCTAssertEqual(harness.store.localClaudeStatus, "Local Claude isn’t signed in.")
+        harness.localClaudeIdentity = harness.claudeWorker.identity
+        await harness.store.refresh()
+        XCTAssertTrue(harness.store.isLocalAccount(harness.store.accounts[1]))
+        harness.localClaudeReadHandler = { throw StoreFixtureError.offline }
+        await harness.store.refresh()
+        XCTAssertNil(harness.store.localClaudeEmail)
+        XCTAssertNil(harness.store.localClaudeCheckedAt)
+        XCTAssertFalse(harness.store.isLocalAccount(harness.store.accounts[1]))
+        XCTAssertTrue(harness.store.isLocalAccount(harness.store.accounts[0]))
+    }
+
+    func testChangingClaudeCLIPathDiscardsInFlightLocalIdentity() async {
+        let harness = Harness(connected: false)
+        defer { harness.finish() }
+        harness.store.accounts[1].provider = .claude
+        let gate = Deferred<CodexIdentity?>()
+        harness.localClaudeReadHandler = { try await gate.wait() }
+        let refresh = Task { await harness.store.refresh() }
+        await eventually { harness.localClaudeReadCalls == 1 }
+        harness.store.claudePath = "/different/claude"
+        gate.succeed(CodexIdentity(email: "claude@fixture.test", planType: nil, type: "claude"))
+        await refresh.value
+        XCTAssertNil(harness.store.localClaudeEmail)
+        XCTAssertNil(harness.store.localClaudeCheckedAt)
+    }
+
+    func testClaudeConnectRefreshesItsLocalBadgeAndExpiryHidesIt() async {
+        let harness = Harness(connected: false)
+        defer { harness.finish() }
+        await harness.store.setProvider(.claude, for: "account-1")
+        harness.claudeWorker.identity = CodexIdentity(email: "claude@fixture.test", planType: "pro", type: "claude")
+        harness.localClaudeIdentity = harness.claudeWorker.identity
+        await harness.store.connect("account-1")
+        await eventually { harness.localClaudeReadCalls == 1 && harness.store.login == nil }
+        XCTAssertTrue(harness.store.isLocalAccount(harness.store.accounts[0]))
+        XCTAssertEqual(harness.localReadCalls, 0)
+        harness.now = harness.now.addingTimeInterval(CodexUsageViewerConstants.staleInterval + 1)
+        XCTAssertFalse(harness.store.isLocalAccount(harness.store.accounts[0]))
+    }
+
     func testConnectedUITestFixtureHasNamesPlanAndLocalBadgeWithoutNetwork() async {
         let harness = Harness(arguments: ["--ui-testing", "--ui-testing-connected"])
         defer { harness.finish() }
@@ -451,11 +522,13 @@ final class CodexStoreTests: XCTestCase {
         XCTAssertEqual(harness.store.accounts[0].displayName, "Alex Morgan")
         XCTAssertEqual(harness.store.accounts[0].plan, "pro")
         XCTAssertTrue(harness.store.isLocalAccount(harness.store.accounts[0]))
+        XCTAssertTrue(harness.store.isLocalAccount(harness.store.accounts[1]))
         await harness.store.refresh()
         await harness.store.connect("account-1")
         await harness.store.disconnect("account-1")
         XCTAssertEqual(harness.worker.accountCalls, 0)
         XCTAssertEqual(harness.localReadCalls, 0)
+        XCTAssertEqual(harness.localClaudeReadCalls, 0)
         XCTAssertEqual(harness.worker.beginCalls, 0)
         XCTAssertTrue(harness.saved.isEmpty)
     }

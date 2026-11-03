@@ -24,11 +24,20 @@ final class ClaudeConnectionTests: XCTestCase {
         #!/usr/bin/python3
         import json, os, sys, time
         mode = '\(mode)'
-        folder = os.environ['CLAUDE_CONFIG_DIR']
+        local = mode.startswith('local-')
+        folder = os.path.join(os.path.dirname(__file__), 'local') if local else os.environ['CLAUDE_CONFIG_DIR']
         assert os.getcwd() == os.path.realpath(folder)
         assert 'ANTHROPIC_API_KEY' not in os.environ
+        if local:
+            assert 'CLAUDE_CONFIG_DIR' not in os.environ
+            assert sys.argv[1:] == ['auth', 'status', '--json']
+            open(os.path.join(os.path.dirname(__file__), 'local-transcript'), 'w').write('auth status --json')
+            if mode == 'local-wait':
+                time.sleep(60)
         if sys.argv[1:3] == ['auth', 'status']:
-            print(json.dumps({'loggedIn': True, 'authMethod': 'claude.ai', 'email': 'claude@example.com', 'subscriptionType': 'pro', 'configDirectory': folder if mode != 'wrong-directory' else '/tmp/wrong'}), flush=True)
+            print(json.dumps({'loggedIn': mode != 'local-signed-out', 'authMethod': 'api_key' if mode == 'local-api-key' else 'claude.ai', 'email': 'claude@example.com', 'subscriptionType': 'pro', 'configDirectory': '/tmp/wrong' if mode.endswith('wrong-directory') else folder}), flush=True)
+            if mode == 'local-signed-out':
+                sys.exit(1)
         elif sys.argv[1:3] == ['auth', 'login']:
             if os.environ.get('CLAUDE_CODE_OAUTH_REFRESH_TOKEN'):
                 assert os.environ['CLAUDE_CODE_OAUTH_SCOPES'] == 'user:profile'
@@ -73,6 +82,73 @@ final class ClaudeConnectionTests: XCTestCase {
         XCTAssertEqual(identity?.planType, "pro")
         let attributes = try FileManager.default.attributesOfItem(atPath: fixture.root.appendingPathComponent("account-1").path)
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
+    }
+
+    func testLocalIdentityUsesOnlyStatusWithoutChangingDefaultStorage() async throws {
+        let fixture = try fixture(mode: "local-normal")
+        defer { fixture.remove() }
+        let directory = fixture.base.appendingPathComponent("local")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                               attributes: [.posixPermissions: 0o755])
+        let sentinel = directory.appendingPathComponent(".credentials.json")
+        let original = Data("Not a credential; the viewer must never parse this file.".utf8)
+        try original.write(to: sentinel)
+        let identity = try await ClaudeConnection.readLocalIdentity(executableURL: fixture.executable, configDirectory: directory)
+        XCTAssertEqual(identity?.email, "claude@example.com")
+        XCTAssertEqual(identity?.type, "claude")
+        XCTAssertNil(identity?.fullName)
+        XCTAssertEqual(try Data(contentsOf: sentinel), original)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [".credentials.json"])
+        XCTAssertEqual(try String(contentsOf: fixture.base.appendingPathComponent("local-transcript")), "auth status --json")
+        XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions] as? NSNumber)?.intValue, 0o755)
+    }
+
+    func testMissingLocalDirectoryDoesNotStartCLIOrCreateStorage() async throws {
+        let fixture = try fixture(mode: "local-normal")
+        defer { fixture.remove() }
+        let directory = fixture.base.appendingPathComponent("local")
+        let identity = try await ClaudeConnection.readLocalIdentity(executableURL: fixture.executable, configDirectory: directory)
+        XCTAssertNil(identity)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.base.appendingPathComponent("local-transcript").path))
+    }
+
+    func testLocalStatusRejectsWrongDirectoryAndAPIKeysAndAllowsSignedOut() async throws {
+        for (mode, expected) in [("local-wrong-directory", ClaudeConnectionError.outdatedCLI), ("local-api-key", .subscriptionRequired)] {
+            let fixture = try fixture(mode: mode)
+            defer { fixture.remove() }
+            let directory = fixture.base.appendingPathComponent("local")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            do {
+                _ = try await ClaudeConnection.readLocalIdentity(executableURL: fixture.executable, configDirectory: directory)
+                XCTFail("Expected local identity rejection")
+            } catch { XCTAssertEqual(error as? ClaudeConnectionError, expected) }
+        }
+        let fixture = try fixture(mode: "local-signed-out")
+        defer { fixture.remove() }
+        let directory = fixture.base.appendingPathComponent("local")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let identity = try await ClaudeConnection.readLocalIdentity(executableURL: fixture.executable, configDirectory: directory)
+        XCTAssertNil(identity)
+    }
+
+    func testLocalStatusHasBoundedWaitAndFiltersInheritedAuthenticationOverrides() async throws {
+        let fixture = try fixture(mode: "local-wait")
+        defer { fixture.remove() }
+        let directory = fixture.base.appendingPathComponent("local")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        do {
+            _ = try await ClaudeConnection.readLocalIdentity(executableURL: fixture.executable, configDirectory: directory, requestTimeout: 0.1)
+            XCTFail("Expected bounded local lookup")
+        } catch { XCTAssertEqual(error as? ClaudeConnectionError, .timedOut) }
+        let environment = ClaudeConnection.localIdentityEnvironment(executableURL: fixture.executable, inherited: [
+            "CLAUDE_CONFIG_DIR": "/other-account", "CLAUDE_SECURESTORAGE_CONFIG_DIR": "/other-keychain",
+            "CLAUDE_CODE_OAUTH_TOKEN": "synthetic", "ANTHROPIC_API_KEY": "synthetic", "NODE_OPTIONS": "--require fixture"
+        ])
+        for key in ["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "NODE_OPTIONS"] {
+            XCTAssertNil(environment[key])
+        }
+        XCTAssertEqual(environment["BROWSER"], "/usr/bin/true")
     }
 
     func testWrongDirectoryIsRejectedBeforeLogin() async throws {
