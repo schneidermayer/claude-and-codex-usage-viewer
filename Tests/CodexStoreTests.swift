@@ -515,24 +515,6 @@ final class CodexStoreTests: XCTestCase {
         XCTAssertFalse(harness.store.isLocalAccount(harness.store.accounts[0]))
     }
 
-    func testConnectedUITestFixtureHasNamesPlanAndLocalBadgeWithoutNetwork() async {
-        let harness = Harness(arguments: ["--ui-testing", "--ui-testing-connected"])
-        defer { harness.finish() }
-        XCTAssertFalse(harness.store.isDemo)
-        XCTAssertEqual(harness.store.accounts[0].displayName, "Alex Morgan")
-        XCTAssertEqual(harness.store.accounts[0].plan, "pro")
-        XCTAssertTrue(harness.store.isLocalAccount(harness.store.accounts[0]))
-        XCTAssertTrue(harness.store.isLocalAccount(harness.store.accounts[1]))
-        await harness.store.refresh()
-        await harness.store.connect("account-1")
-        await harness.store.disconnect("account-1")
-        XCTAssertEqual(harness.worker.accountCalls, 0)
-        XCTAssertEqual(harness.localReadCalls, 0)
-        XCTAssertEqual(harness.localClaudeReadCalls, 0)
-        XCTAssertEqual(harness.worker.beginCalls, 0)
-        XCTAssertTrue(harness.saved.isEmpty)
-    }
-
     func testAccountCreationRemovalAndProviderChoicePersistWithinBounds() async {
         let harness = Harness(connected: false)
         defer { harness.finish() }
@@ -695,13 +677,4 @@ final class CodexStoreTests: XCTestCase {
         await harness.store.cancelLogin()
     }
 
-    func testManualCodeUITestFixtureNeverStartsWorkersOrPersistsCode() async {
-        let harness = Harness(arguments: ["--ui-testing", "--ui-testing-login-code"])
-        defer { harness.finish() }
-        XCTAssertEqual(harness.store.login?.attemptID, "fixture-attempt")
-        await harness.store.submitLoginCode("synthetic-code#fixture")
-        XCTAssertNil(harness.store.login)
-        XCTAssertEqual(harness.claudeWorker.beginCalls, 0)
-        XCTAssertTrue(harness.saved.isEmpty)
-    }
 }

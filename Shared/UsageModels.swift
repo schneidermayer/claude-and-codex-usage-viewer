@@ -4,6 +4,7 @@ enum CodexUsageViewerConstants {
     // Keep this kind stable for installed wide widgets.
     static let widgetKind = "CodexUsageViewerUsageWidget"
     static let smallWidgetKind = "CodexUsageViewerSmallWidget"
+    static let dashboardWidgetKind = "CodexUsageViewerDashboardWidget"
     static var appGroup: String {
         Bundle.main.object(forInfoDictionaryKey: "CodexUsageViewerAppGroup") as? String ?? "AW7ZNT442J.com.inndevs.codexusageviewer"
     }

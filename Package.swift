@@ -7,7 +7,7 @@ let package = Package(
     products: [.library(name: "CodexUsageViewerCore", targets: ["CodexUsageViewerCore"])],
     targets: [
         .target(name: "CodexUsageViewerCore", path: ".", exclude: ["build", "build-ui", "dist", "VERSION", "docs", "README.md", "CodexUsageViewer.xcodeproj", "CodexUsageViewer/Assets.xcassets", "Shared/CodexUsageViewerStyle.swift", "CodexUsageViewer/Views", "CodexUsageViewer/CodexUsageViewerApp.swift", "CodexUsageViewerHelper", "CodexUsageViewerWidget", "Config", "Tests", "scripts", "AGENTS.md"], sources: ["Shared/UsageModels.swift", "Shared/WeeklyUsage.swift", "Shared/CodexUsageViewerVersion.swift", "Shared/SharedSnapshotStore.swift", "Background", "CodexUsageViewer/Services", "CodexUsageViewer/CodexUsageViewerStore.swift"]),
-        .testTarget(name: "CodexUsageViewerCoreTests", dependencies: ["CodexUsageViewerCore"], path: "Tests", exclude: ["UI"])
+        .testTarget(name: "CodexUsageViewerCoreTests", dependencies: ["CodexUsageViewerCore"], path: "Tests")
     ],
     swiftLanguageModes: [.v5]
 )

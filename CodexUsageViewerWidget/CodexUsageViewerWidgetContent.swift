@@ -129,15 +129,25 @@ struct CodexUsageViewerWidgetContent: View {
         .help("\(account.provider.displayName), subscription plan: \(account.subscriptionDisplayName ?? "Unknown plan")")
     }
 
+    @ViewBuilder
     private func usagePanel(_ account: AccountSnapshot, window: QuotaWindow?, color: Color,
                             compact: Bool) -> some View {
+        if isSmall {
+            smallUsagePanel(account, window: window, color: color, compact: compact)
+        } else {
+            horizontalUsagePanel(account, window: window, color: color, compact: compact)
+        }
+    }
+
+    private func smallUsagePanel(_ account: AccountSnapshot, window: QuotaWindow?, color: Color,
+                                 compact: Bool) -> some View {
         let state = account.usage(for: window, at: referenceDate)
         let reset = state.window.flatMap { QuotaResetProgress(window: $0, at: referenceDate) }
         let session = window?.windowDurationMins == 300
         let label = session ? "5h" : "7d"
         let fullLabel = window?.label ?? "Usage"
-        let showLabel = compact || !isSmall || session
-        let size: CGFloat = compact ? (narrowColumns ? 14 : (isSmall ? 20 : 18)) : (narrowColumns ? 24 : (isSmall ? 30 : 32))
+        let showLabel = compact || session
+        let size: CGFloat = compact ? (narrowColumns ? 14 : 20) : (narrowColumns ? 24 : 30)
         let description = state.window.map { "\(fullLabel): \($0.remainingPercent) percent remaining" }
             ?? "\(fullLabel) usage unknown. \(state.status ?? "")"
         let resetDescription = reset.map { "Reset in \($0.countdown)" } ?? (state.status ?? "Reset time not reported")
@@ -146,7 +156,7 @@ struct CodexUsageViewerWidgetContent: View {
             HStack(alignment: .firstTextBaseline, spacing: 2) {
                 if showLabel {
                     Text(label)
-                        .font(.system(size: isSmall ? 8 : 10, weight: .medium))
+                        .font(.system(size: 8, weight: .medium))
                         .foregroundStyle(.secondary)
                         .fixedSize()
                 }
@@ -157,19 +167,82 @@ struct CodexUsageViewerWidgetContent: View {
             if !compact { Spacer(minLength: 0) }
             CodexUsageViewerResetTrack(fractionRemaining: reset?.fractionRemaining, accent: color,
                                       segments: session ? 5 : 7, height: 3,
-                                      spacing: isSmall ? 1 : 2, widgetAccentable: true)
+                                      spacing: 1, widgetAccentable: true)
             Text(reset?.countdown ?? compactResetStatus(state))
-                .font(.system(size: isSmall ? 9 : 10, weight: .medium))
+                .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .frame(height: 11)
         }
-        .padding(.horizontal, isSmall ? 3 : 6)
+        .padding(.horizontal, 3)
         .padding(.vertical, 2)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background { columnFill(remaining: state.window?.remainingPercent, color: color) }
+        .background { smallUsageFill(remaining: state.window?.remainingPercent, color: color) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(description). \(resetDescription)")
+        .help("\(description). \(resetDescription)")
+    }
+
+    private func horizontalUsagePanel(_ account: AccountSnapshot, window: QuotaWindow?, color: Color,
+                                      compact: Bool) -> some View {
+        let state = account.usage(for: window, at: referenceDate)
+        let reset = state.window.flatMap { QuotaResetProgress(window: $0, at: referenceDate) }
+        let session = window?.windowDurationMins == 300
+        let fullLabel = window?.label ?? "Usage"
+        let shortLabels = isSmall && accounts.count > 1
+        let label = shortLabels && window != nil ? (session ? "5h" : "7d") : fullLabel
+        let size: CGFloat = compact ? (narrowColumns ? 14 : 20) : (shortLabels ? 22 : 30)
+        let description = state.window.map { "\(fullLabel): \($0.remainingPercent) percent remaining" }
+            ?? "\(fullLabel) usage unknown. \(state.status ?? "")"
+        let resetDescription = reset.map { "Reset in \($0.countdown)" } ?? (state.status ?? "Reset time not reported")
+        return VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 2) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label)
+                        .font(.system(size: shortLabels ? 8 : 10, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    if !compact && !shortLabels {
+                        Text(state.window == nil ? "unknown" : "remaining")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                percentage(state, color: color, size: size, compact: compact)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .frame(height: compact ? size + 2 : size + 5)
+            Spacer(minLength: 0)
+            VStack(spacing: 2) {
+                HStack(spacing: 2) {
+                    if !shortLabels && reset != nil {
+                        Text("Resets in")
+                            .foregroundStyle(.secondary)
+                            .fixedSize()
+                    }
+                    Text(reset?.countdown ?? compactResetStatus(state))
+                        .fontWeight(.medium)
+                        .monospacedDigit()
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                .font(.system(size: shortLabels ? 9 : 8))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(height: 11)
+                CodexUsageViewerResetTrack(fractionRemaining: reset?.fractionRemaining, accent: color,
+                                          segments: session ? 5 : 7, height: 3,
+                                          spacing: isSmall ? 1 : 2, widgetAccentable: true)
+            }
+        }
+        .padding(.horizontal, isSmall ? 3 : 6)
+        .padding(.vertical, 3)
+        .padding(.top, compact ? 0 : 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background { usageFill(remaining: state.window?.remainingPercent, color: color) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(description). \(resetDescription)")
         .help("\(description). \(resetDescription)")
@@ -188,7 +261,29 @@ struct CodexUsageViewerWidgetContent: View {
             .widgetAccentable()
     }
 
-    private func columnFill(remaining: Int?, color: Color) -> some View {
+    private func usageFill(remaining: Int?, color: Color) -> some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                color.opacity(colorScheme == .dark ? 0.055 : 0.04)
+                if let remaining, remaining > 0 {
+                    color.opacity(colorScheme == .dark ? 0.14 : 0.10)
+                        .frame(width: geometry.size.width * CGFloat(remaining) / 100)
+                        .overlay(alignment: .trailing) {
+                            if remaining < 100 {
+                                color.opacity(colorScheme == .dark ? 0.24 : 0.18)
+                                    .frame(width: 0.5)
+                            }
+                        }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .widgetAccentable()
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func smallUsageFill(remaining: Int?, color: Color) -> some View {
         GeometryReader { geometry in
             ZStack(alignment: .bottom) {
                 color.opacity(colorScheme == .dark ? 0.045 : 0.03)

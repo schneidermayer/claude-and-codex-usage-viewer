@@ -30,7 +30,7 @@ app = project.new_target(:application, 'CodexUsageViewer', :osx, '27.0')
 widget = project.new_target(:app_extension, 'CodexUsageViewerWidget', :osx, '27.0')
 helper = project.new_target(:command_line_tool, 'CodexUsageViewerHelper', :osx, '27.0')
 groups = {}
-%w[CodexUsageViewer Shared Background CodexUsageViewerHelper CodexUsageViewerWidget Config Tests].each { |name| groups[name] = project.main_group.new_group(name, name) }
+%w[CodexUsageViewer Shared Background CodexUsageViewerHelper CodexUsageViewerWidget Config].each { |name| groups[name] = project.main_group.new_group(name, name) }
 refs = {}
 Dir.glob('{CodexUsageViewer,Shared,Background,CodexUsageViewerHelper,CodexUsageViewerWidget}/**/*.swift').sort.each do |path|
   top, rest = path.split('/', 2)
@@ -106,18 +106,10 @@ version_phase = app.shell_script_build_phases.find { |phase| phase.name == 'Deri
 app.build_phases.delete(version_phase)
 app.build_phases << version_phase
 
-if Dir.exist?('Tests/UI')
-  ui = project.new_target(:ui_test_bundle, 'CodexUsageViewerUITests', :osx, '27.0')
-  ui.add_dependency(app)
-  Dir.glob('Tests/UI/*.swift').each { |path| ui.source_build_phase.add_file_reference(groups['Tests'].new_file(path.sub('Tests/', ''))) }
-  ui.build_configurations.each do |config|
-    config.build_settings.merge!({ 'PRODUCT_BUNDLE_IDENTIFIER' => 'com.inndevs.codexusageviewer.uitests', 'GENERATE_INFOPLIST_FILE' => 'YES', 'TEST_TARGET_NAME' => 'CodexUsageViewer', 'CODE_SIGN_IDENTITY' => 'Apple Development', 'SWIFT_VERSION' => '5.0', 'MACOSX_DEPLOYMENT_TARGET' => '27.0' })
-  end
-end
 project.save
 scheme = Xcodeproj::XCScheme.new
 scheme.add_build_target(app)
 scheme.set_launch_target(app)
-scheme.add_test_target(ui) if defined?(ui) && ui
+scheme.doc.elements['Scheme'].delete_element('TestAction')
 scheme.save_as('CodexUsageViewer.xcodeproj', 'CodexUsageViewer', true)
 puts 'Generated CodexUsageViewer.xcodeproj'

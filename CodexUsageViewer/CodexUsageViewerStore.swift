@@ -109,7 +109,6 @@ final class CodexUsageViewerStore: ObservableObject {
     var openDashboardAction: (() -> Void)?
     private let dependencies: CodexUsageViewerStoreDependencies
     private let preferences: UserDefaults
-    private let isUITesting: Bool
     private let managesChromeProfiles: Bool
     private let background: (any BackgroundServing)?
     private let backgroundService: BackgroundServiceRegistration?
@@ -177,13 +176,9 @@ final class CodexUsageViewerStore: ObservableObject {
     }
 
     convenience init() {
-        let testing = ProcessInfo.processInfo.arguments.contains("--ui-testing")
-        let testSuite = "com.inndevs.codexusageviewer.uitesting"
-        let preferences = testing ? UserDefaults(suiteName: testSuite)! : .standard
-        if testing { preferences.removePersistentDomain(forName: testSuite) }
-        self.init(dependencies: .live, preferences: preferences, startsPolling: true,
+        self.init(dependencies: .live, preferences: .standard, startsPolling: true,
                   arguments: ProcessInfo.processInfo.arguments,
-                  background: testing ? nil : BackgroundClient(), managesBackgroundService: !testing)
+                  background: BackgroundClient(), managesBackgroundService: true)
     }
 
     init(dependencies: CodexUsageViewerStoreDependencies, preferences: UserDefaults,
@@ -192,10 +187,9 @@ final class CodexUsageViewerStore: ObservableObject {
          managesChromeProfiles: Bool = true) {
         self.dependencies = dependencies
         self.preferences = preferences
-        isUITesting = arguments.contains("--ui-testing")
         self.managesChromeProfiles = managesChromeProfiles
-        self.background = isUITesting ? nil : background
-        backgroundService = managesBackgroundService && !isUITesting ? BackgroundServiceRegistration() : nil
+        self.background = background
+        backgroundService = managesBackgroundService ? BackgroundServiceRegistration() : nil
         profileSelections = managesChromeProfiles ? preferences.dictionary(forKey: "chromeProfiles") as? [String: String] ?? [:] : [:]
         let discoveredProfiles = managesChromeProfiles ? dependencies.discoverChromeProfiles() : []
         chromeProfiles = discoveredProfiles
@@ -207,17 +201,15 @@ final class CodexUsageViewerStore: ObservableObject {
         let claudeExecutable = preferences.string(forKey: "claudeExecutable") ?? ""
         claudePath = claudeExecutable
         availableClaude = dependencies.locateClaudeExecutable(claudeExecutable) != nil
-        let cachedSnapshot = isUITesting ? UsageSnapshot.empty : SharedSnapshotStore.normalized(dependencies.loadSnapshot())
+        let cachedSnapshot = SharedSnapshotStore.normalized(dependencies.loadSnapshot())
         var cached = cachedSnapshot.accounts
-        if !isUITesting {
-            // Check app-owned credential existence, without reading tokens.
-            for index in cached.indices where cached[index].state == .disconnected {
-                let exists = cached[index].provider == .codex
-                    ? dependencies.credentialExists(cached[index].id)
-                    : dependencies.claudeCredentialExists(cached[index].id)
-                if exists {
-                    cached[index].state = .needsSignIn
-                }
+        // Check app-owned credential existence, without reading tokens.
+        for index in cached.indices where cached[index].state == .disconnected {
+            let exists = cached[index].provider == .codex
+                ? dependencies.credentialExists(cached[index].id)
+                : dependencies.claudeCredentialExists(cached[index].id)
+            if exists {
+                cached[index].state = .needsSignIn
             }
         }
         accounts = cached
@@ -230,25 +222,9 @@ final class CodexUsageViewerStore: ObservableObject {
             isDemo = true
             accounts = UsageSnapshot.preview.accounts
         }
-        if isUITesting && arguments.contains("--ui-testing-connected") {
-            accounts = UsageSnapshot.preview.accounts
-            liveAccounts = accounts
-            isDemo = false
-            localCodexEmail = accounts.first?.email
-            localCodexCheckedAt = dependencies.now()
-            localClaudeEmail = accounts.first(where: { $0.provider == .claude })?.email
-            localClaudeCheckedAt = dependencies.now()
-        }
-        if isUITesting && arguments.contains("--ui-testing-login-code") {
-            accounts = [AccountSnapshot(id: "account-1", name: "Account", provider: .claude)]
-            liveAccounts = accounts
-            login = PendingLogin(id: "account-1", accountName: "Account 1",
-                                 authURL: URL(string: "https://claude.com/cai/oauth/authorize?state=fixture"),
-                                 isWaiting: true, attemptID: "fixture-attempt")
-        }
         updateLocalCodexMatchStatus()
         updateLocalClaudeMatchStatus()
-        if startsPolling && !isUITesting {
+        if startsPolling {
             pollTask = Task { [weak self] in
                 await self?.backgroundService?.registerIfNeeded()
                 while !Task.isCancelled {
@@ -321,7 +297,7 @@ final class CodexUsageViewerStore: ObservableObject {
         defer { pendingDisconnectIDs.remove(id); busyAccountIDs.remove(id); isChangingAccounts = false }
         connections.removeValue(forKey: id)?.stop()
         do {
-            if !isUITesting { try await dependencies.removeCredentials(id, account.provider) }
+            try await dependencies.removeCredentials(id, account.provider)
             guard !stopped else { return }
             accounts.removeAll { $0.id == id }
             profileSelections.removeValue(forKey: id)
@@ -333,7 +309,7 @@ final class CodexUsageViewerStore: ObservableObject {
     }
 
     func refresh() async {
-        guard !stopped, !isDemo, !isUITesting, !isRefreshing, !isChangingAccounts else { return }
+        guard !stopped, !isDemo, !isRefreshing, !isChangingAccounts else { return }
         if background != nil { await sendToBackground(.refresh); return }
         availableCodex = dependencies.locateExecutable(codexPath) != nil
         availableClaude = dependencies.locateClaudeExecutable(claudePath) != nil
@@ -354,7 +330,7 @@ final class CodexUsageViewerStore: ObservableObject {
     }
 
     private func refreshLocalCodexIdentity() async {
-        guard !isDemo, !isUITesting else { return }
+        guard !isDemo else { return }
         let lookup = UUID()
         localLookupID = lookup
         guard let executable = dependencies.locateExecutable(codexPath) else {
@@ -403,7 +379,7 @@ final class CodexUsageViewerStore: ObservableObject {
     }
 
     private func refreshLocalClaudeIdentity() async {
-        guard !stopped, !isDemo, !isUITesting else { return }
+        guard !stopped, !isDemo else { return }
         guard accounts.contains(where: { $0.provider == .claude }) else { return }
         let lookup = UUID()
         localClaudeLookupID = lookup
@@ -494,7 +470,7 @@ final class CodexUsageViewerStore: ObservableObject {
     }
 
     func connect(_ accountID: String) async {
-        guard !stopped, !isChangingAccounts, !isDemo, !isUITesting, login == nil, loginTask == nil, !busyAccountIDs.contains(accountID), !pendingDisconnectIDs.contains(accountID), let account = accounts.first(where: { $0.id == accountID }) else { return }
+        guard !stopped, !isChangingAccounts, !isDemo, login == nil, loginTask == nil, !busyAccountIDs.contains(accountID), !pendingDisconnectIDs.contains(accountID), let account = accounts.first(where: { $0.id == accountID }) else { return }
         if managesChromeProfiles {
             chromeProfiles = dependencies.discoverChromeProfiles()
             profileSelections = profileSelections.filter { _, profileID in chromeProfiles.contains(where: { $0.id == profileID }) }
@@ -556,10 +532,6 @@ final class CodexUsageViewerStore: ObservableObject {
         }
         login?.isSubmittingCode = true
         login?.error = nil
-        if isUITesting {
-            login = nil
-            return
-        }
         if background != nil {
             await sendToBackground(.submitLoginCode(accountID: pending.id, loginID: attempt, code: code))
             return
@@ -609,7 +581,7 @@ final class CodexUsageViewerStore: ObservableObject {
     }
 
     func disconnect(_ accountID: String) async {
-        guard !stopped, !isChangingAccounts, !isDemo, !isUITesting, let index = accounts.firstIndex(where: { $0.id == accountID }), !pendingDisconnectIDs.contains(accountID) else { return }
+        guard !stopped, !isChangingAccounts, !isDemo, let index = accounts.firstIndex(where: { $0.id == accountID }), !pendingDisconnectIDs.contains(accountID) else { return }
         if background != nil { await sendToBackground(.disconnect(accountID: accountID)); return }
         pendingDisconnectIDs.insert(accountID)
         var ownsBusyState = false
@@ -732,7 +704,7 @@ final class CodexUsageViewerStore: ObservableObject {
     }
 
     private func persist() {
-        guard !stopped, background == nil, !isDemo, !isUITesting else { return }
+        guard !stopped, background == nil, !isDemo else { return }
         liveAccounts = accounts
         do {
             var snapshot = UsageSnapshot(accounts: accounts, savedAt: dependencies.now())

@@ -12,6 +12,10 @@ Native macOS app and widgets for one to three accounts in any mix of Claude and 
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/widget-large.png">
   <img src="docs/images/widget-large-light.png" width="540" alt="Wide widget with compact account headers, local Claude and Codex indicators, usage fills, separate reset countdowns, credits, and earned resets">
 </picture>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/widget-dashboard.png">
+  <img src="docs/images/widget-dashboard-light.png" width="540" alt="Taller Dashboard widget with full-height vertical usage fills, large percentages, and aligned reset dates and resources">
+</picture>
 
 *Layout previews with sample accounts.*
 
@@ -19,7 +23,7 @@ Native macOS app and widgets for one to three accounts in any mix of Claude and 
 
 1. Unzip the download and move the app to Applications.
 2. Choose Claude or Codex for the first account, then sign in through its browser profile. If Claude displays an authentication code, paste the complete code into the app’s **Authentication code** field and choose **Submit code**. Use **Add account** for up to three accounts in any combination; remove accounts from their options menu.
-3. In **Edit Widgets**, add **Small** (square) or **Large** (wide).
+3. In **Edit Widgets**, add **Small** (compact square), **Large** (wide), or **Dashboard** (a taller square with detailed account cards).
 
 Upgrading from Codex Usage Viewer: quit and remove the old app bundle from Applications before installing the renamed app. Account connections remain in their existing storage. If existing desktop widgets keep showing old data after the rename, log out of macOS and back in, or restart, to clear the cached old app location.
 
@@ -27,9 +31,9 @@ Select the appropriate Claude or Codex executable in Settings if detection fails
 
 A login helper refreshes every three minutes, including after quitting. Allow or disable it in **System Settings → General → Login Items & Extensions**; connection status appears in app Settings. macOS controls widget refresh timing.
 
-The dashboard shows each reported limit in its own panel, filled from left to right with its remaining percentage, alongside a reset countdown. Widgets adapt to one to three accounts and show both five-hour and weekly limits when reported, with a separate reset bar and countdown for each. Each widget column fills from the bottom to show its remaining percentage. Accounts with both limits have two filled panels: five-hour above, weekly below. Unknown or expired usage has no fill. The segmented tracks show time until reset; **5h** and **7d** identify the periods. Single-limit accounts keep a larger percentage. The computer marks a confirmed match to the default local Claude or Codex account; Ⓒ marks Codex credits and ↶ earned resets. Earned resets are separate from automatic resets. Codex Prolite/Pro/Promax display as 100/200/500; Claude plan names remain unchanged.
+Widgets adapt to one to three accounts and show both five-hour and weekly limits when reported, with five-hour above weekly. **Small** keeps its compact vertical fills, **5h** / **7d** period labels, and countdowns below the segmented reset tracks. **Large** fills its panels from left to right, with the period on the left, percentage on the right, and countdown above the track. **Dashboard** uses vertical fills as the account-column backgrounds, behind the names, large percentages, and reset details. A single limit fills the whole column; paired limits have separate full-width background sections with a subtle divider. There are no inset quota boxes. Reset dates, Codex resources, and earned-reset expiry align at the bottom. Full identities remain available in tooltips and accessibility labels.
 
-Both widget sizes use compact outer margins and place the provider icon, subscription, and local-account indicator together below the name. Paired five-hour and weekly bars have equal sizes, with the reset tracks inset from their edges. Single-limit figures sit within the full panel, while weekly reset tracks and countdowns align at the bottom of neighboring columns. Credits and earned resets sit below the bars and share one row in Small. Credit balances use short forms such as **7.1k** and **71k**, rounded down; full values remain available in tooltips and accessibility labels.
+All three widgets place the provider icon, subscription, and local-account indicator together below the name. The computer marks a confirmed match to the default local Claude or Codex account; Ⓒ marks Codex credits and ↶ earned resets. Credits and earned resets sit below the bars and share one row in Small. Earned resets are separate from automatic resets. Single-limit accounts have larger panels; paired panels have equal sizes. Credit balances use short forms such as **7.1k** and **71k**, rounded down; full values remain available in tooltips and accessibility labels. Codex Prolite/Pro/Promax display as 100/200/500; Claude plan names remain unchanged.
 
 Missing data, expired limits, and data older than ten minutes are unknown. Widgets use compact resource values, — for unknown, and ∞ for unlimited credits; full identities and exact values remain available to accessibility and in tooltips. A reset timestamp never proves quota recovery.
 
@@ -42,13 +46,11 @@ Requires Xcode. Configure signing, team, and App Group for the app, helper, and 
 swift test
 python3 scripts/test_version.py
 ./scripts/render_widgets.sh
-xcodebuild -project CodexUsageViewer.xcodeproj -scheme CodexUsageViewer \
-  -configuration Debug -derivedDataPath build -destination 'platform=macOS' test
 ```
 
 Output: `build/Build/Products/Release/Claude and Codex Usage Viewer.app`.
 
-Tests and renders use fixtures; verify live accounts and desktop widget hosting separately.
+Swift tests and offscreen widget renders use fixtures and do not drive the desktop UI. There is no automated UI test target. Live-account and desktop widget checks are separate.
 
 After adding sources, run `ruby scripts/generate_project.rb` (requires the `xcodeproj` gem).
 

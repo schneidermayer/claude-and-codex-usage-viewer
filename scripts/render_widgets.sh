@@ -12,6 +12,7 @@ xcrun swiftc \
   "$PROJECT_ROOT/Shared/WeeklyUsage.swift" \
   "$PROJECT_ROOT/Shared/CodexUsageViewerStyle.swift" \
   "$PROJECT_ROOT/CodexUsageViewerWidget/CodexUsageViewerWidgetContent.swift" \
+  "$PROJECT_ROOT/CodexUsageViewerWidget/CodexUsageViewerDashboardWidgetContent.swift" \
   "$PROJECT_ROOT/scripts/render_widgets.swift" \
   -o "$PROJECT_ROOT/build/tools/render_widgets"
 
