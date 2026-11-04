@@ -264,9 +264,9 @@ struct CodexUsageViewerWidgetContent: View {
     private func usageFill(remaining: Int?, color: Color) -> some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-                color.opacity(colorScheme == .dark ? 0.055 : 0.04)
+                color.opacity(colorScheme == .dark ? 0.055 : 0.05)
                 if let remaining, remaining > 0 {
-                    color.opacity(colorScheme == .dark ? 0.14 : 0.10)
+                    color.opacity(colorScheme == .dark ? 0.14 : 0.12)
                         .frame(width: geometry.size.width * CGFloat(remaining) / 100)
                         .overlay(alignment: .trailing) {
                             if remaining < 100 {
@@ -286,9 +286,9 @@ struct CodexUsageViewerWidgetContent: View {
     private func smallUsageFill(remaining: Int?, color: Color) -> some View {
         GeometryReader { geometry in
             ZStack(alignment: .bottom) {
-                color.opacity(colorScheme == .dark ? 0.045 : 0.03)
+                color.opacity(colorScheme == .dark ? 0.045 : 0.05)
                 if let remaining, remaining > 0 {
-                    color.opacity(colorScheme == .dark ? 0.14 : 0.10)
+                    color.opacity(colorScheme == .dark ? 0.14 : 0.12)
                         .frame(height: geometry.size.height * CGFloat(remaining) / 100)
                         .overlay(alignment: .top) {
                             if remaining < 100 {

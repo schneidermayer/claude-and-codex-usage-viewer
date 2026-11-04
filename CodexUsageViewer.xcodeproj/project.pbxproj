@@ -21,13 +21,16 @@
 		275BBBF2153C812F2FBDE2ED /* WeeklyUsage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EC9C618160BC0ABA442D3D5 /* WeeklyUsage.swift */; };
 		2C36762D82EA774635729710 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 72D46F76FD5C117F17055A4D /* Assets.xcassets */; };
 		2E6F97BEF71926CB592D9BF9 /* ChromeProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2709002BF62E20AF11A76F1F /* ChromeProfiles.swift */; };
+		34442CDB8263D9F904918210 /* AppUpdateStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41A9604C2A4790CBEDD9B4F6 /* AppUpdateStatusView.swift */; };
 		3B358967442220D22FF4F70F /* CodexUsageViewerDashboardWidgetContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD42A4147D0F5F72F4186D96 /* CodexUsageViewerDashboardWidgetContent.swift */; };
 		3C98E81E7C667B9A7A58E7E4 /* CodexUsageViewerStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D3086B8B9CE552FAEC737FD /* CodexUsageViewerStyle.swift */; };
 		414C5C0CEA70EF393EA30CF4 /* CodexUsageViewerWidgetContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2597F282025240220B3BCCF /* CodexUsageViewerWidgetContent.swift */; };
+		42964D6080E2EBE09C857023 /* GitHubUpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4259A10F80BCD9B8A922CEAC /* GitHubUpdateChecker.swift */; };
 		48F89DB5FD6596D94B2BBD4C /* com.inndevs.codexusageviewer.helper.plist in Embed Launch Agent */ = {isa = PBXBuildFile; fileRef = 4E416D4D20F41575F8B21C69 /* com.inndevs.codexusageviewer.helper.plist */; };
 		5830F1C13B40A0C000C9A69F /* ClaudeConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44134A38C0CFE9E15D6416D8 /* ClaudeConnection.swift */; };
 		6AECE1A863D40D0F59E60C1F /* CodexUsageViewerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAA2AF75714C559D3C756F3D /* CodexUsageViewerApp.swift */; };
 		6C02CC77BAD9CBABD9B23E00 /* ConnectionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D67B2260A0E054E7176AEE6 /* ConnectionSheet.swift */; };
+		74C6418422F48B995CDA139A /* GitHubUpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4259A10F80BCD9B8A922CEAC /* GitHubUpdateChecker.swift */; };
 		814C91EF629FC5BAB5574820 /* ChromeProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2709002BF62E20AF11A76F1F /* ChromeProfiles.swift */; };
 		81B7BF672E52FA2A9ED13CD7 /* CodexUsageViewerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D418B0AFDB6D618E0070FA6 /* CodexUsageViewerStore.swift */; };
 		83887BCE87EA55BBF6FEE7CE /* CodexRPCFramer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 492E329950F6ED2C241C2482 /* CodexRPCFramer.swift */; };
@@ -113,6 +116,8 @@
 		2709002BF62E20AF11A76F1F /* ChromeProfiles.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ChromeProfiles.swift; path = Services/ChromeProfiles.swift; sourceTree = "<group>"; };
 		3755CD31147F9B5B488853B3 /* BackgroundIPC.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BackgroundIPC.swift; sourceTree = "<group>"; };
 		3AA340B674A97E685BFD0273 /* CodexUsageViewerWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CodexUsageViewerWidget.swift; sourceTree = "<group>"; };
+		41A9604C2A4790CBEDD9B4F6 /* AppUpdateStatusView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppUpdateStatusView.swift; path = Views/AppUpdateStatusView.swift; sourceTree = "<group>"; };
+		4259A10F80BCD9B8A922CEAC /* GitHubUpdateChecker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GitHubUpdateChecker.swift; path = Services/GitHubUpdateChecker.swift; sourceTree = "<group>"; };
 		44134A38C0CFE9E15D6416D8 /* ClaudeConnection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ClaudeConnection.swift; path = Services/ClaudeConnection.swift; sourceTree = "<group>"; };
 		492E329950F6ED2C241C2482 /* CodexRPCFramer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CodexRPCFramer.swift; path = Services/CodexRPCFramer.swift; sourceTree = "<group>"; };
 		4E416D4D20F41575F8B21C69 /* com.inndevs.codexusageviewer.helper.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = com.inndevs.codexusageviewer.helper.plist; sourceTree = "<group>"; };
@@ -280,6 +285,8 @@
 				5D67B2260A0E054E7176AEE6 /* ConnectionSheet.swift */,
 				936F3EEA3BC554117FB9EF47 /* DashboardView.swift */,
 				72D46F76FD5C117F17055A4D /* Assets.xcassets */,
+				4259A10F80BCD9B8A922CEAC /* GitHubUpdateChecker.swift */,
+				41A9604C2A4790CBEDD9B4F6 /* AppUpdateStatusView.swift */,
 			);
 			name = CodexUsageViewer;
 			path = CodexUsageViewer;
@@ -481,6 +488,7 @@
 				CF292AE7C6ED8898FC993D4E /* SharedSnapshotStore.swift in Sources */,
 				0CC0085AD394478BCAF0B41C /* UsageModels.swift in Sources */,
 				275BBBF2153C812F2FBDE2ED /* WeeklyUsage.swift in Sources */,
+				42964D6080E2EBE09C857023 /* GitHubUpdateChecker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -504,6 +512,8 @@
 				146F3F2E6CAC9D9328BFCB0D /* SharedSnapshotStore.swift in Sources */,
 				1106F9CFCAC65494FFA018E1 /* UsageModels.swift in Sources */,
 				D2F3D6A37572FF0100254592 /* WeeklyUsage.swift in Sources */,
+				74C6418422F48B995CDA139A /* GitHubUpdateChecker.swift in Sources */,
+				34442CDB8263D9F904918210 /* AppUpdateStatusView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -599,7 +609,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
-				MARKETING_VERSION = 2.3;
+				MARKETING_VERSION = 2.3.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -714,7 +724,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
-				MARKETING_VERSION = 2.3;
+				MARKETING_VERSION = 2.3.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				OTHER_CODE_SIGN_FLAGS = "--timestamp";

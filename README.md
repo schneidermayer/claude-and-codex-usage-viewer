@@ -31,6 +31,8 @@ Select the appropriate Claude or Codex executable in Settings if detection fails
 
 A login helper refreshes every three minutes, including after quitting. Allow or disable it in **System Settings → General → Login Items & Extensions**; connection status appears in app Settings. macOS controls widget refresh timing.
 
+The app checks GitHub for a newer release once when it opens. An available update appears beside the app version and in Settings, with a link to the release and download. Use **Check for Updates…** in the app menu or **Check for Updates** in Settings to check again. Updates are downloaded and installed manually.
+
 Widgets adapt to one to three accounts and show both five-hour and weekly limits when reported, with five-hour above weekly. **Small** keeps its compact vertical fills, **5h** / **7d** period labels, and countdowns below the segmented reset tracks. **Large** fills its panels from left to right, with the period on the left, percentage on the right, and countdown above the track. **Dashboard** uses vertical fills as the account-column backgrounds, behind the names, large percentages, and reset details. A single limit fills the whole column; paired limits have separate full-width background sections with a subtle divider. There are no inset quota boxes. Reset dates, Codex resources, and earned-reset expiry align at the bottom. Full identities remain available in tooltips and accessibility labels.
 
 All three widgets place the provider icon, subscription, and local-account indicator together below the name. The computer marks a confirmed match to the default local Claude or Codex account; Ⓒ marks Codex credits and ↶ earned resets. Credits and earned resets sit below the bars and share one row in Small. Earned resets are separate from automatic resets. Single-limit accounts have larger panels; paired panels have equal sizes. Credit balances use short forms such as **7.1k** and **71k**, rounded down; full values remain available in tooltips and accessibility labels. Codex Prolite/Pro/Promax display as 100/200/500; Claude plan names remain unchanged.
@@ -51,6 +53,14 @@ python3 scripts/test_version.py
 Output: `build/Build/Products/Release/Claude and Codex Usage Viewer.app`.
 
 Swift tests and offscreen widget renders use fixtures and do not drive the desktop UI. There is no automated UI test target. Live-account and desktop widget checks are separate.
+
+To run the same GitHub update check from the installed app without opening windows or starting account connections:
+
+```sh
+"/Applications/Claude and Codex Usage Viewer.app/Contents/MacOS/Claude and Codex Usage Viewer" --check-for-updates
+```
+
+The command prints JSON with the installed version and update status, and exits with a nonzero status if the check fails.
 
 After adding sources, run `ruby scripts/generate_project.rb` (requires the `xcodeproj` gem).
 

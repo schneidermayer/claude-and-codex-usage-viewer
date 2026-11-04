@@ -4,6 +4,7 @@ import ServiceManagement
 
 struct CodexUsageViewerSettingsView: View {
     @ObservedObject var store: CodexUsageViewerStore
+    @EnvironmentObject private var updateChecker: GitHubUpdateChecker
     @Environment(\.dismiss) private var dismiss
     @State private var executablePath = ""
     @State private var claudeExecutablePath = ""
@@ -56,6 +57,8 @@ struct CodexUsageViewerSettingsView: View {
                 detail(symbol: "lock.shield", title: "Private account connections", text: "Each account has its own connection on this Mac. Your widget receives usage snapshots; it never receives sign-in credentials.")
                 detail(symbol: "clock", title: "Last reported usage", text: "Usage shows the last successful update. A reset countdown never assumes that a limit has recovered.")
             }
+
+            AppUpdateStatusView(checker: updateChecker)
 
             HStack {
                 Text("Version \(CodexUsageViewerVersion.display)")

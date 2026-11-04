@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DashboardView: View {
     @ObservedObject var store: CodexUsageViewerStore
+    @EnvironmentObject private var updateChecker: GitHubUpdateChecker
     @Environment(\.colorScheme) private var colorScheme
     @State private var disconnecting: AccountSnapshot?
     @State private var removing: AccountSnapshot?
@@ -94,6 +95,13 @@ struct DashboardView: View {
                     HStack(spacing: 8) {
                         Text("Version \(CodexUsageViewerVersion.display)")
                             .accessibilityIdentifier("codexusageviewer.version")
+                        if case .available(let release) = updateChecker.state {
+                            Link(destination: release.url) {
+                                Label("Update \(release.version)", systemImage: "arrow.down.circle")
+                            }
+                            .help("View version \(release.version) on GitHub")
+                            .accessibilityIdentifier("codexusageviewer.updateAvailable")
+                        }
                         Circle().fill(.tertiary).frame(width: 2, height: 2)
                         HStack(spacing: 5) {
                             Circle()
