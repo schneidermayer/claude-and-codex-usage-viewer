@@ -436,16 +436,12 @@ final class CodexUsageViewerStore: ObservableObject {
             let worker = try connection(for: id)
             guard let identity = try await worker.account(), identity.type == accounts[index].provider.identityType else {
                 accounts[index].state = .needsSignIn
-                accounts[index].buckets = []
-                accounts[index].resetCredits = nil
-                accounts[index].updatedAt = nil
+                accounts[index].clearUsage()
                 accounts[index].issue = "Sign in to reconnect this account."
                 return
             }
             if accounts[index].email != identity.email || accounts[index].plan != identity.planType {
-                accounts[index].buckets = []
-                accounts[index].resetCredits = nil
-                accounts[index].updatedAt = nil
+                accounts[index].clearUsage()
             }
             accounts[index].email = identity.email
             accounts[index].plan = identity.planType
@@ -454,6 +450,7 @@ final class CodexUsageViewerStore: ObservableObject {
             let limits = try await worker.readLimits()
             accounts[index].buckets = limits.buckets
             accounts[index].resetCredits = limits.rateLimitResetCredits
+            accounts[index].fableResetCredits = limits.fableResetCredits
             accounts[index].updatedAt = dependencies.now()
             accounts[index].issue = nil
         } catch {
@@ -461,9 +458,7 @@ final class CodexUsageViewerStore: ObservableObject {
             if let claudeError = error as? ClaudeConnectionError,
                claudeError == .signInRequired || claudeError == .subscriptionRequired {
                 accounts[index].state = .needsSignIn
-                accounts[index].buckets = []
-                accounts[index].resetCredits = nil
-                accounts[index].updatedAt = nil
+                accounts[index].clearUsage()
             }
             // Transient failures preserve the last successful snapshot with its original age.
         }

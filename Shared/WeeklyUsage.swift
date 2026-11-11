@@ -59,6 +59,19 @@ enum QuotaUsageState: Equatable {
         case .resetElapsed: return "Reset passed · refresh"
         }
     }
+
+    /// Short status for a widget's countdown slot.
+    var compactStatus: String {
+        switch self {
+        case .available, .notReported: return "—"
+        case .disconnected: return "Connect"
+        case .needsSignIn: return "Sign in"
+        case .waiting: return "Waiting"
+        case .stale: return "Stale"
+        case .unavailable: return "Unavailable"
+        case .resetElapsed: return "Refresh"
+        }
+    }
 }
 
 struct WeeklyResetProgress: Equatable {
@@ -119,14 +132,53 @@ enum WeeklyWidgetTimeline {
             if staleAt > now && staleAt < reloadAt { dates.append(staleAt) }
         }
         for account in snapshot.accounts {
-            for resetAt in [account.fiveHourWindow, account.weeklyWindow].compactMap({ $0?.resetDate })
-                where resetAt > now && resetAt < reloadAt {
-                dates.append(resetAt)
-            }
-            if let expiry = account.resetCredits?.expiryDate, expiry > now && expiry < reloadAt {
-                dates.append(expiry)
-            }
+            let changes = [account.fiveHourWindow, account.weeklyWindow, account.fableWindow].map { $0?.resetDate }
+                + [account.resetCredits, account.fableResetCredits].map { $0?.expiryDate }
+            dates += changes.compactMap { $0 }.filter { $0 > now && $0 < reloadAt }
         }
         return Set(dates).sorted()
+    }
+}
+
+/// One icon-and-value item in a widget's bottom resource row.
+struct WidgetResource: Hashable {
+    let symbol: String
+    let text: String
+    let label: String
+    /// Earned resets align to the trailing edge.
+    let trailing: Bool
+}
+
+extension AccountSnapshot {
+    /// Codex: credits and resets. Claude: Fable limit, regular resets, and Fable resets.
+    func widgetResources(at date: Date, short: Bool) -> [WidgetResource] {
+        func item(_ symbol: String, _ value: AccountResourceValue, _ label: String, trailing: Bool) -> WidgetResource {
+            WidgetResource(symbol: symbol, text: value.widgetText(short: short), label: "\(label): \(value.accessibilityText)", trailing: trailing)
+        }
+        let resets = item("arrow.counterclockwise", resetsValue(at: date), "Available usage resets", trailing: true)
+        if provider == .codex {
+            return [item("c.circle", creditsValue(at: date), "Available credits", trailing: false), resets]
+        }
+        var items: [WidgetResource] = []
+        if let fable = fableWindow {
+            let remaining = usage(for: fable, at: date).window?.remainingPercent
+            items.append(WidgetResource(symbol: "sparkles", text: remaining.map { "\($0)%" } ?? "—",
+                                        label: "Fable limit: \(remaining.map { "\($0) percent remaining" } ?? "unknown")", trailing: false))
+        }
+        if hasEarnedResets {
+            items += [resets, item("sparkle", resetsValue(fable: true, at: date), "Available Fable resets", trailing: true)]
+        }
+        return items
+    }
+}
+
+extension AccountResourceValue {
+    func widgetText(short: Bool) -> String {
+        let text = short ? shortText : compactText
+        // Keep scientific values readable in a column: 1.0E+030 becomes 1e30.
+        let parts = text.split(separator: "E")
+        guard parts.count == 2, let exponent = Int(parts[1]) else { return text }
+        let mantissa = parts[0].hasSuffix(".0") ? String(parts[0].dropLast(2)) : String(parts[0])
+        return "\(mantissa)e\(exponent)"
     }
 }

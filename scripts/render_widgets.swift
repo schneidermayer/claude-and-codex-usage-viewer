@@ -71,6 +71,7 @@ struct RenderWidgets {
         Covers five-hour and weekly quotas in either slot, independently expired limits,
         single-window accounts, disconnected/stale accounts, missing reset times, long names,
         local-account icons, subscription tiers/fallbacks, zero/unknown/unlimited/expired resources,
+        Claude Fable limits and Fable/regular earned resets,
         and one, two, or three accounts mixing Claude and Codex.
         """
         try readme.write(to: output.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
@@ -183,8 +184,14 @@ struct RenderWidgets {
             allClaude.accounts[index].plan = ["Pro", "Max", "Team"][index]
             allClaude.accounts[index].buckets[0].limitId = "claude"
             allClaude.accounts[index].buckets[0].credits = nil
-            allClaude.accounts[index].resetCredits = nil
         }
+        // Fable: low with no resets, preview values, and not reported.
+        allClaude.accounts[0].buckets.append(UsageBucket(limitId: "claude_fable", limitName: "Fable", secondary: QuotaWindow(
+            usedPercent: 92, windowDurationMins: 10_080, resetsAt: Int(now.timeIntervalSince1970) + 90_000)))
+        allClaude.accounts[0].resetCredits = RateLimitResetCredits(availableCount: 0)
+        allClaude.accounts[0].fableResetCredits = RateLimitResetCredits(availableCount: 0)
+        allClaude.accounts[2].resetCredits = nil
+        allClaude.accounts[2].fableResetCredits = nil
         var oneCodex = connected
         oneCodex.accounts = [connected.accounts[0]]
         var sessionOnly = connected

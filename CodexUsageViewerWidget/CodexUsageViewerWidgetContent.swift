@@ -87,19 +87,8 @@ struct CodexUsageViewerWidgetContent: View {
             .frame(height: usageHeight)
             .padding(.top, 4)
 
-            Group {
-                if account.provider != .codex {
-                    Color.clear.accessibilityHidden(true)
-                } else if isSmall {
-                    smallResources(account)
-                } else {
-                    HStack(spacing: 3) {
-                        credits(account)
-                        Spacer(minLength: 0)
-                        availableResets(account)
-                    }
-                }
-            }
+            WidgetResourceRow(items: account.widgetResources(at: referenceDate, short: isSmall),
+                              sizes: isSmall ? [10, 9, 8, 7, 6, 5] : [11, 10, 9, 8, 7], centered: isSmall)
             .frame(height: resourcesHeight)
             .padding(.top, 3)
         }
@@ -168,7 +157,7 @@ struct CodexUsageViewerWidgetContent: View {
             CodexUsageViewerResetTrack(fractionRemaining: reset?.fractionRemaining, accent: color,
                                       segments: session ? 5 : 7, height: 3,
                                       spacing: 1, widgetAccentable: true)
-            Text(reset?.countdown ?? compactResetStatus(state))
+            Text(reset?.countdown ?? state.compactStatus)
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
@@ -224,7 +213,7 @@ struct CodexUsageViewerWidgetContent: View {
                             .foregroundStyle(.secondary)
                             .fixedSize()
                     }
-                    Text(reset?.countdown ?? compactResetStatus(state))
+                    Text(reset?.countdown ?? state.compactStatus)
                         .fontWeight(.medium)
                         .monospacedDigit()
                         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -305,84 +294,10 @@ struct CodexUsageViewerWidgetContent: View {
         .accessibilityHidden(true)
     }
 
-    private func smallResources(_ account: AccountSnapshot) -> some View {
-        let credits = account.creditsValue(at: referenceDate)
-        let resets = account.resetsValue(at: referenceDate)
-        let description = "Available credits: \(credits.accessibilityText). Available usage resets: \(resets.accessibilityText)"
-        let row = Text("\(Image(systemName: "c.circle")) \(compactResourceText(credits))  \(Image(systemName: "arrow.counterclockwise")) \(compactResourceText(resets))")
-        // Size symbols and digits together; Text's minimumScaleFactor does not
-        // reliably shrink interpolated symbols in a narrow widget column.
-        return ViewThatFits(in: .horizontal) {
-            row.font(.system(size: 9, weight: .medium)).fixedSize()
-            row.font(.system(size: 8, weight: .medium)).fixedSize()
-            row.font(.system(size: 7, weight: .medium)).fixedSize()
-            row.font(.system(size: 6, weight: .medium)).fixedSize()
-            row.font(.system(size: 5, weight: .medium)).fixedSize()
-        }
-            .monospacedDigit()
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .allowsTightening(true)
-            .frame(maxWidth: .infinity)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(description)
-            .help(description)
-    }
-
-    private func credits(_ account: AccountSnapshot) -> some View {
-        resource(account.creditsValue(at: referenceDate), symbol: "c.circle", alignment: isSmall ? .center : .leading,
-                 label: "Available credits", help: "Credits available for additional usage")
-    }
-
-    private func availableResets(_ account: AccountSnapshot) -> some View {
-        resource(account.resetsValue(at: referenceDate), symbol: "arrow.counterclockwise", alignment: isSmall ? .center : .trailing,
-                 label: "Available usage resets", help: "Earned usage resets available to use")
-    }
-
-    private func resource(_ value: AccountResourceValue, symbol: String, alignment: Alignment,
-                          label: String, help: String) -> some View {
-        HStack(spacing: 2) {
-            Image(systemName: symbol)
-                .font(.system(size: isSmall ? 9 : 10, weight: .medium))
-                .accessibilityHidden(true)
-            Text(compactResourceText(value))
-                .font(.system(size: isSmall ? 9 : 11, weight: .medium))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, alignment: alignment)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(label): \(value.accessibilityText)")
-        .help("\(help): \(value.accessibilityText)")
-    }
-
     private func widgetName(_ account: AccountSnapshot) -> String {
         // Shorten only the verified profile name; preserve official email and slot fallbacks.
         account.fullName?.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
             ?? account.displayName
-    }
-
-    private func compactResourceText(_ value: AccountResourceValue) -> String {
-        let text = isSmall ? value.shortText : value.compactText
-        // Keep scientific values readable in a column: 1.0E+030 becomes 1e30.
-        let parts = text.split(separator: "E")
-        guard parts.count == 2, let exponent = Int(parts[1]) else { return text }
-        let mantissa = parts[0].hasSuffix(".0") ? String(parts[0].dropLast(2)) : String(parts[0])
-        return "\(mantissa)e\(exponent)"
-    }
-
-    private func compactResetStatus(_ state: QuotaUsageState) -> String {
-        switch state {
-        case .available, .notReported: return "—"
-        case .disconnected: return "Connect"
-        case .needsSignIn: return "Sign in"
-        case .waiting: return "Waiting"
-        case .stale: return "Stale"
-        case .unavailable: return "Unavailable"
-        case .resetElapsed: return "Refresh"
-        }
     }
 
     private func accent(_ index: Int) -> Color {

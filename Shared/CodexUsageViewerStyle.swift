@@ -121,6 +121,39 @@ struct CodexUsageViewerEyebrow: View {
     }
 }
 
+/// Widget resource row. Shrinks as a unit; Text's minimumScaleFactor does not
+/// reliably shrink interpolated symbols in a narrow widget column.
+struct WidgetResourceRow: View {
+    let items: [WidgetResource]
+    let sizes: [CGFloat]
+    var centered = false
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            ForEach(sizes, id: \.self) { size in
+                HStack(spacing: size * 0.45) {
+                    ForEach(items.filter { !$0.trailing }, id: \.self, content: item)
+                    if !centered { Spacer(minLength: 0) }
+                    ForEach(items.filter(\.trailing), id: \.self, content: item)
+                }
+                .font(.system(size: size, weight: .medium))
+            }
+        }
+        .monospacedDigit()
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func item(_ item: WidgetResource) -> some View {
+        // A thin space keeps each icon with its value.
+        Text("\(Image(systemName: item.symbol))\u{2009}\(item.text)")
+            .fixedSize()
+            .accessibilityLabel(item.label)
+            .help(item.label)
+    }
+}
+
 enum CodexUsageViewerFormatting {
     static func reset(_ window: QuotaWindow, now: Date = .now) -> String {
         guard let reset = window.resetDate else { return "Reset time unavailable" }

@@ -39,14 +39,14 @@ def main():
         if git(ROOT, 'rev-parse', f'{args.version}^{{commit}}') != git(ROOT, 'rev-parse', 'HEAD'):
             parser.error('release tag already points to a different commit')
     else:
-        # Tag first so the build displays the release version.
+        # Tag first so the build counts from the release tag.
         run('git', 'tag', '-a', args.version, '-m', f'Release {args.version}')
     run('python3', 'scripts/test_version.py')
     run('swift', 'test')
     run('./scripts/build.sh', 'ARCHS=arm64 x86_64', 'ONLY_ACTIVE_ARCH=NO')
     app = ROOT / 'build/Build/Products/Release/Claude and Codex Usage Viewer.app'
     info = json.loads((app / 'Contents/Resources/BuildVersion.json').read_text())
-    if info['display'] != args.version or info['commit'] != git(ROOT, 'rev-parse', 'HEAD'):
+    if info['display'] != f'{args.version}-0' or info['commit'] != git(ROOT, 'rev-parse', 'HEAD'):
         raise RuntimeError('built version does not match the release tag')
     run('codesign', '--verify', '--deep', '--strict', str(app))
     helper = app / 'Contents/MacOS/CodexUsageViewerHelper'

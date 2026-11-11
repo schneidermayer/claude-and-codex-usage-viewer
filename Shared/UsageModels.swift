@@ -177,6 +177,7 @@ struct RateLimitsResponse: Codable, Sendable {
     var accountId: String?
     var ordinaryUsageAllowed: Bool?
     var rateLimitResetCredits: RateLimitResetCredits?
+    var fableResetCredits: RateLimitResetCredits?
 
     var buckets: [UsageBucket] {
         guard let all = rateLimitsByLimitId, !all.isEmpty else { return [rateLimits] }
@@ -220,6 +221,7 @@ struct AccountSnapshot: Codable, Equatable, Identifiable, Sendable {
     var fullName: String? = nil
     var resetCredits: RateLimitResetCredits? = nil
     var provider: AccountProvider = .codex
+    var fableResetCredits: RateLimitResetCredits? = nil
 
     // Legacy slot labels remain decodable but are never used as account names.
     var displayName: String {
@@ -242,7 +244,17 @@ struct AccountSnapshot: Codable, Equatable, Identifiable, Sendable {
     }
 
     var primaryBucket: UsageBucket? { buckets.first(where: { $0.id == provider.rawValue }) ?? buckets.first }
+    var fableWindow: QuotaWindow? { buckets.first(where: { $0.id == "claude_fable" })?.secondary }
     var isConnected: Bool { state == .connected }
+    /// Claude reports earned resets only when it offers them; Codex always has the resources row.
+    var hasEarnedResets: Bool { provider == .codex || resetCredits != nil || fableResetCredits != nil }
+
+    mutating func clearUsage() {
+        buckets = []
+        resetCredits = nil
+        fableResetCredits = nil
+        updatedAt = nil
+    }
 
     func creditsValue(at date: Date = .now) -> AccountResourceValue {
         guard isConnected, issue == nil, !isStale(at: date), let credits = primaryBucket?.credits else { return .unknown }
@@ -254,11 +266,18 @@ struct AccountSnapshot: Codable, Equatable, Identifiable, Sendable {
         return .amount(NSDecimalNumber(decimal: balance).stringValue)
     }
 
-    func resetsValue(at date: Date = .now) -> AccountResourceValue {
+    func resetsValue(fable: Bool = false, at date: Date = .now) -> AccountResourceValue {
         guard isConnected, issue == nil, !isStale(at: date),
-              let resets = resetCredits, let count = resets.availableCount, count >= 0 else { return .unknown }
+              let resets = fable ? fableResetCredits : resetCredits,
+              let count = resets.availableCount, count >= 0 else { return .unknown }
         if let expiry = resets.expiryDate, expiry <= date { return .unknown }
         return .amount(String(count))
+    }
+
+    /// Earliest expiry of one reset category, if its count is known and nonzero.
+    func resetExpiry(fable: Bool = false, at date: Date = .now) -> Date? {
+        guard case .amount(let count) = resetsValue(fable: fable, at: date), count != "0" else { return nil }
+        return (fable ? fableResetCredits : resetCredits)?.expiryDate
     }
 
     func isStale(at date: Date = .now) -> Bool {
@@ -285,6 +304,7 @@ extension AccountSnapshot {
         fullName = try values.decodeIfPresent(String.self, forKey: .fullName)
         resetCredits = try values.decodeIfPresent(RateLimitResetCredits.self, forKey: .resetCredits)
         provider = try values.decodeIfPresent(AccountProvider.self, forKey: .provider) ?? .codex
+        fableResetCredits = try values.decodeIfPresent(RateLimitResetCredits.self, forKey: .fableResetCredits)
     }
 }
 
@@ -329,7 +349,9 @@ struct UsageSnapshot: Codable, Equatable, Sendable {
         accounts[1].buckets[0].limitId = "claude"
         accounts[1].buckets[0].limitName = "Claude"
         accounts[1].buckets[0].credits = nil
-        accounts[1].resetCredits = nil
+        accounts[1].buckets.append(UsageBucket(limitId: "claude_fable", limitName: "Fable", secondary: QuotaWindow(usedPercent: 36, windowDurationMins: 10_080, resetsAt: Int(now.timeIntervalSince1970) + 259_200)))
+        accounts[1].resetCredits = RateLimitResetCredits(availableCount: 1, earliestExpiresAt: Int(now.timeIntervalSince1970) + 604_800)
+        accounts[1].fableResetCredits = RateLimitResetCredits(availableCount: 3, earliestExpiresAt: Int(now.timeIntervalSince1970) + 432_000)
         return UsageSnapshot(accounts: accounts, savedAt: now)
     }
 }

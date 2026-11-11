@@ -11,8 +11,8 @@ struct CodexUsageViewerDashboardWidgetContent: View {
 
     private var accounts: [AccountSnapshot] { Array(snapshot.accounts.prefix(3)) }
     private var dense: Bool { accounts.count == 3 }
-    private var showsResources: Bool { accounts.contains { $0.provider == .codex } }
-    private var showsExpiry: Bool { accounts.contains { resetExpiry($0) != nil } }
+    private var showsResources: Bool { accounts.contains { !$0.widgetResources(at: referenceDate, short: dense).isEmpty } }
+    private var showsExpiry: Bool { accounts.contains { !resetExpiries($0).isEmpty } }
     private var footerHeight: CGFloat { 24 + (showsResources ? 26 : 0) + (showsExpiry ? 24 : 0) }
 
     var body: some View {
@@ -144,7 +144,7 @@ struct CodexUsageViewerDashboardWidgetContent: View {
                         .foregroundStyle(.secondary)
                         .fixedSize()
                 }
-                Text(reset?.countdown ?? resetStatus(state))
+                Text(reset?.countdown ?? state.compactStatus)
                     .fontWeight(.medium)
                     .monospacedDigit()
                     .frame(maxWidth: .infinity, alignment: .trailing)
@@ -231,50 +231,58 @@ struct CodexUsageViewerDashboardWidgetContent: View {
             dateDetails(date, label: "\(window?.label ?? "Usage") reset")
                 .frame(height: 24)
             if showsResources {
-                Group {
-                    if account.provider == .codex {
-                        VStack(spacing: 4) {
-                            Divider().overlay(.primary.opacity(0.04))
-                            HStack(spacing: 4) {
-                                resource(account.creditsValue(at: referenceDate), symbol: "c.circle",
-                                         label: "Available credits")
-                                Spacer(minLength: 0)
-                                resource(account.resetsValue(at: referenceDate), symbol: "arrow.counterclockwise",
-                                         label: "Available usage resets")
-                            }
-                        }
-                    } else {
-                        Color.clear.accessibilityHidden(true)
+                let items = account.widgetResources(at: referenceDate, short: dense)
+                VStack(spacing: 4) {
+                    if !items.isEmpty {
+                        Divider().overlay(.primary.opacity(0.04))
+                        WidgetResourceRow(items: items, sizes: dense ? [10, 9, 8, 7] : [12, 11, 10, 9])
                     }
                 }
-                .frame(height: 22)
+                .frame(height: 22, alignment: .top)
             }
             if showsExpiry {
-                Group {
-                    if let expiry = resetExpiry(account) {
-                        dateDetails(expiry, label: "Next usage reset expires", expiry: true)
-                    } else {
-                        Color.clear.accessibilityHidden(true)
+                // One line per reset category; categories expire independently. Lines shrink together.
+                ViewThatFits(in: .horizontal) {
+                    ForEach([8, 7.5, 7] as [CGFloat], id: \.self) { size in
+                        VStack(alignment: .leading, spacing: 1) {
+                            ForEach(resetExpiries(account), id: \.label) { expiry in
+                                let description = "\(expiry.label) next expire \(expiry.date.formatted(date: .complete, time: .shortened))"
+                                Text("\(Image(systemName: expiry.symbol))\u{2009}Expires \(expiry.date.formatted(.dateTime.month(.abbreviated).day()))")
+                                    .accessibilityLabel(description)
+                                    .help(description)
+                            }
+                        }
+                        .font(.system(size: size))
+                        .fixedSize()
                     }
                 }
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .frame(height: 20)
             }
         }
     }
 
-    private func dateDetails(_ date: Date?, label: String, expiry: Bool = false) -> some View {
+    private func resetExpiries(_ account: AccountSnapshot) -> [(label: String, symbol: String, date: Date)] {
+        [(false, "Usage resets", "arrow.counterclockwise"), (true, "Fable resets", "sparkle")]
+            .compactMap { fable, label, symbol in
+                account.resetExpiry(fable: fable, at: referenceDate).map { (label, symbol, $0) }
+            }
+    }
+
+    private func dateDetails(_ date: Date?, label: String) -> some View {
         let description = "\(label): \(date?.formatted(date: .complete, time: .shortened) ?? "unavailable")"
         return VStack(alignment: .leading, spacing: 0) {
             if let date {
-                Text(expiry ? "Expires \(date.formatted(.dateTime.month(.abbreviated).day()))"
-                            : date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
+                Text(date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
                 Text(date, format: .dateTime.hour().minute())
                     .monospacedDigit()
             } else {
                 Text("Reset unavailable")
             }
         }
-        .font(.system(size: expiry ? 8 : 9))
+        .font(.system(size: 9))
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .minimumScaleFactor(0.8)
@@ -282,43 +290,6 @@ struct CodexUsageViewerDashboardWidgetContent: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(description)
         .help(description)
-    }
-
-    private func resetExpiry(_ account: AccountSnapshot) -> Date? {
-        guard account.provider == .codex, account.resetsValue(at: referenceDate) != .unknown,
-              let count = account.resetCredits?.availableCount, count > 0 else { return nil }
-        return account.resetCredits?.expiryDate
-    }
-
-    private func resource(_ value: AccountResourceValue, symbol: String, label: String) -> some View {
-        Text("\(Image(systemName: symbol)) \(resourceText(value))")
-            .font(.system(size: dense ? 10 : 12, weight: .medium))
-            .foregroundStyle(.secondary)
-            .monospacedDigit()
-            .lineLimit(1)
-            .minimumScaleFactor(0.65)
-            .accessibilityLabel("\(label): \(value.accessibilityText)")
-            .help("\(label): \(value.accessibilityText)")
-    }
-
-    private func resourceText(_ value: AccountResourceValue) -> String {
-        let text = dense ? value.shortText : value.compactText
-        let parts = text.split(separator: "E")
-        guard parts.count == 2, let exponent = Int(parts[1]) else { return text }
-        let mantissa = parts[0].hasSuffix(".0") ? String(parts[0].dropLast(2)) : String(parts[0])
-        return "\(mantissa)e\(exponent)"
-    }
-
-    private func resetStatus(_ state: QuotaUsageState) -> String {
-        switch state {
-        case .available, .notReported: return "—"
-        case .disconnected: return "Connect"
-        case .needsSignIn: return "Sign in"
-        case .waiting: return "Waiting"
-        case .stale: return "Stale"
-        case .unavailable: return "Unavailable"
-        case .resetElapsed: return "Refresh"
-        }
     }
 
     private func accent(for account: AccountSnapshot) -> Color {

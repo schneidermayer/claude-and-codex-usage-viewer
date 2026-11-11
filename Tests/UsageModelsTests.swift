@@ -35,6 +35,29 @@ final class UsageModelsTests: XCTestCase {
         XCTAssertEqual(resourceAccount(resets: RateLimitResetCredits(availableCount: 0)).resetsValue(at: resourceNow), .amount("0"))
     }
 
+    func testClaudeFableLimitAndResetsStaySeparate() {
+        var account = resourceAccount(credits: nil, resets: RateLimitResetCredits(availableCount: 2, earliestExpiresAt: 1_900_000_900))
+        account.provider = .claude
+        account.buckets = [UsageBucket(limitId: "claude"),
+                           UsageBucket(limitId: "claude_fable", limitName: "Fable", secondary: QuotaWindow(usedPercent: 70, windowDurationMins: 10_080))]
+        account.fableResetCredits = RateLimitResetCredits(availableCount: 1, earliestExpiresAt: 1_900_000_300)
+        XCTAssertEqual(account.fableWindow?.remainingPercent, 30)
+        XCTAssertEqual(account.resetsValue(at: resourceNow), .amount("2"))
+        XCTAssertEqual(account.resetsValue(fable: true, at: resourceNow), .amount("1"))
+        XCTAssertEqual(account.resetExpiry(at: resourceNow), Date(timeIntervalSince1970: 1_900_000_900))
+        XCTAssertEqual(account.resetExpiry(fable: true, at: resourceNow), Date(timeIntervalSince1970: 1_900_000_300))
+        XCTAssertNil(account.resetExpiry(fable: true, at: resourceNow.addingTimeInterval(300)), "An expired Fable reset is unknown")
+        XCTAssertEqual(account.resetExpiry(at: resourceNow.addingTimeInterval(300)), Date(timeIntervalSince1970: 1_900_000_900))
+        XCTAssertEqual(account.widgetResources(at: resourceNow, short: false).map(\.text), ["30%", "2", "1"])
+
+        account.resetCredits = nil
+        account.fableResetCredits = nil
+        XCTAssertFalse(account.hasEarnedResets)
+        XCTAssertEqual(account.widgetResources(at: resourceNow, short: false).map(\.text), ["30%"])
+        account.buckets.removeLast()
+        XCTAssertTrue(account.widgetResources(at: resourceNow, short: false).isEmpty)
+    }
+
     func testCreditsDistinguishReportedZeroAvailabilityUnlimitedAndUnknown() {
         XCTAssertEqual(resourceAccount(credits: nil).creditsValue(at: resourceNow), .unknown)
         XCTAssertEqual(resourceAccount(credits: CreditBalance(hasCredits: false, unlimited: false, balance: nil)).creditsValue(at: resourceNow), .amount("0"))

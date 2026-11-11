@@ -188,9 +188,11 @@ struct DashboardView: View {
                         remove: { removing = account },
                         setProvider: { provider in Task { await store.setProvider(provider, for: account.id) } }
                     )
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+            // Equal card heights; Claude cards with a Fable limit are taller.
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -284,8 +286,7 @@ private struct AccountCard: View {
                 }
             }
             .padding(20)
-            .frame(height: 495, alignment: .top)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, minHeight: 495, maxHeight: .infinity, alignment: .top)
             .background {
                 RoundedRectangle(cornerRadius: 22)
                     .fill(Color(nsColor: .controlBackgroundColor).opacity(colorScheme == .dark ? 0.62 : 0.84))
@@ -394,15 +395,13 @@ private struct AccountCard: View {
             if !account.usageWindows.isEmpty {
                 VStack(spacing: 10) {
                     ForEach(Array(account.usageWindows.enumerated()), id: \.offset) { index, window in
-                        usageSummary(window, index: index, now: now)
+                        usageSummary(window, title: window.label, key: window.windowDurationMins.map(String.init) ?? "window-\(index)", now: now)
+                    }
+                    if let fable = account.fableWindow {
+                        usageSummary(fable, title: "Fable", key: "fable", now: now)
                     }
                 }
                 .padding(.top, 18)
-                if let weekly = account.weeklyWindow {
-                    weeklyResetDate(weekly, now: now)
-                        .padding(.horizontal, 12)
-                        .padding(.top, 9)
-                }
             } else {
                 VStack(spacing: 9) {
                     Image(systemName: "chart.bar.xaxis")
@@ -417,7 +416,7 @@ private struct AccountCard: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 233)
             }
-            if account.provider == .codex {
+            if account.hasEarnedResets {
                 AccountResourcesView(account: account, now: now)
                     .padding(.top, 16)
             }
@@ -440,14 +439,15 @@ private struct AccountCard: View {
         }
     }
 
-    private func usageSummary(_ window: QuotaWindow, index: Int, now: Date) -> some View {
+    private func usageSummary(_ window: QuotaWindow, title: String, key: String, now: Date) -> some View {
         let state = account.usage(for: window, at: now)
         let progress = state.window.flatMap { QuotaResetProgress(window: $0, at: now) }
-        let key = window.windowDurationMins.map(String.init) ?? "window-\(index)"
+        // Weekly limits also show their own reset date.
+        let resetDate = window.windowDurationMins == 10_080 ? state.window?.resetDate : nil
         return VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(window.label)
+                    Text(title)
                         .font(.system(size: 12, weight: .semibold))
                     Text(state.window == nil ? "Usage unknown" : "remaining")
                         .font(.system(size: 10))
@@ -460,8 +460,8 @@ private struct AccountCard: View {
                     .foregroundStyle(state.window == nil ? Color.secondary : accent)
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(state.window.map { "\(window.label), \($0.remainingPercent) percent remaining" }
-                                 ?? "\(window.label) usage unknown. \(state.status ?? "")")
+            .accessibilityLabel(state.window.map { "\(title), \($0.remainingPercent) percent remaining" }
+                                 ?? "\(title) usage unknown. \(state.status ?? "")")
             .accessibilityIdentifier("codexusageviewer.usage.\(key).\(account.id)")
 
             VStack(spacing: 5) {
@@ -479,32 +479,24 @@ private struct AccountCard: View {
                 CodexUsageViewerResetTrack(fractionRemaining: progress?.fractionRemaining, accent: accent,
                                           segments: window.windowDurationMins == 10_080 ? 7 : 5,
                                           height: 5, spacing: 3)
+                if let resetDate {
+                    Text(resetDate, format: .dateTime.weekday(.wide).day().month(.wide).hour().minute())
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 1)
+                }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(window.label) time until reset")
-            .accessibilityValue(progress?.countdown ?? (state.status ?? "Unavailable"))
+            .accessibilityLabel("\(title) time until reset")
+            .accessibilityValue([progress?.countdown ?? (state.status ?? "Unavailable"),
+                                 resetDate?.formatted(date: .complete, time: .shortened)].compactMap { $0 }.joined(separator: ", "))
             .accessibilityIdentifier("codexusageviewer.reset.\(key).\(account.id)")
-
         }
         .padding(12)
         .background {
             usageBarBackground(remaining: state.window?.remainingPercent)
         }
-    }
-
-    private func weeklyResetDate(_ window: QuotaWindow, now: Date) -> some View {
-        Group {
-            if let resetDate = account.usage(for: window, at: now).window?.resetDate {
-                Text(resetDate, format: .dateTime.weekday(.wide).day().month(.wide).year().hour().minute())
-            } else {
-                Text("Weekly reset unavailable")
-            }
-        }
-        .font(.system(size: 9))
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityIdentifier("codexusageviewer.weeklyResetDate.\(account.id)")
     }
 
     private func usageBarBackground(remaining: Int?) -> some View {
@@ -589,8 +581,7 @@ private struct AccountCard: View {
     }
 
     private func hasElapsedWindow(now: Date) -> Bool {
-        guard let bucket = account.primaryBucket else { return false }
-        return [bucket.primary, bucket.secondary].compactMap { $0 }.contains { $0.hasElapsed(at: now) }
+        (account.usageWindows + [account.fableWindow].compactMap { $0 }).contains { $0.hasElapsed(at: now) }
     }
 }
 
@@ -616,40 +607,35 @@ private struct AccountResourcesView: View {
     let now: Date
 
     var body: some View {
-        let resets = account.resetsValue(at: now)
-        // The count's freshness and expiry checks also apply to its expiry date.
-        let expiry = resets != .unknown && resets != .amount("0") ? account.resetCredits?.expiryDate : nil
-        VStack(spacing: 8) {
-            HStack(alignment: .top, spacing: 16) {
-                resource("Credits", symbol: "c.circle", value: account.creditsValue(at: now), key: "credits",
+        HStack(alignment: .top, spacing: 16) {
+            if account.provider == .claude {
+                resource("Usage resets", symbol: "arrow.counterclockwise", value: account.resetsValue(at: now),
+                         expiry: .some(account.resetExpiry(at: now)), key: "availableResets",
+                         description: "Earned resets that refill the 5-hour or weekly limits.")
+                resource("Fable resets", symbol: "sparkle", value: account.resetsValue(fable: true, at: now),
+                         expiry: .some(account.resetExpiry(fable: true, at: now)), key: "fableResets",
+                         description: "Earned resets that give back what Fable used this week.")
+            } else {
+                resource("Credits", symbol: "c.circle", value: account.creditsValue(at: now), expiry: nil, key: "credits",
                          description: "Available credit balance reported by this account.")
-                resource("Usage resets", symbol: "arrow.counterclockwise", value: resets, key: "availableResets",
+                resource("Usage resets", symbol: "arrow.counterclockwise", value: account.resetsValue(at: now),
+                         expiry: .some(account.resetExpiry(at: now)), key: "availableResets",
                          description: "Earned usage resets available to use. Separate from the automatic reset countdowns.")
-            }
-            if resets != .amount("0") {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("Next reset expires")
-                    Spacer(minLength: 0)
-                    Text(expiry.map { $0.formatted(.dateTime.month(.abbreviated).day().hour().minute()) } ?? "Unknown")
-                        .monospacedDigit()
-                }
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .help(expiry.map { "Earliest reported expiry of available usage resets: \($0.formatted(date: .complete, time: .complete))." }
-                      ?? "The next usage reset expiry is unknown. A fresh account update with an expiry date is required.")
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Next usage reset expires: \(expiry.map { $0.formatted(date: .complete, time: .complete) } ?? "Unknown")")
-                .accessibilityIdentifier("codexusageviewer.resetExpiry.\(account.id)")
             }
         }
         .padding(.top, 12)
         .overlay(alignment: .top) { Divider().opacity(0.6) }
     }
 
-    private func resource(_ title: String, symbol: String, value: AccountResourceValue,
+    /// `expiry` is nil for resources without one; `.some(nil)` is an unknown expiry.
+    private func resource(_ title: String, symbol: String, value: AccountResourceValue, expiry: Date??,
                           key: String, description: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        let expiryText: String? = switch (expiry, value) {
+        case (nil, _), (_, .amount("0")): nil
+        case (.some(.some(let date)), _): "Expires \(date.formatted(.dateTime.month(.abbreviated).day().hour().minute()))"
+        case (.some(nil), _): "Expiry unknown"
+        }
+        return VStack(alignment: .leading, spacing: 5) {
             Label(title, systemImage: symbol)
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
@@ -659,11 +645,17 @@ private struct AccountResourcesView: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
+            if let expiryText {
+                Text(expiryText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .help("\(description) \(value.accessibilityText)")
+        .help([description, value.accessibilityText, expiryText].compactMap { $0 }.joined(separator: " "))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Available \(title.lowercased()): \(value.accessibilityText)")
+        .accessibilityLabel(["Available \(title.lowercased()): \(value.accessibilityText)", expiryText].compactMap { $0 }.joined(separator: ". "))
         .accessibilityIdentifier("codexusageviewer.\(key).\(account.id)")
     }
 }
@@ -709,7 +701,7 @@ private struct AccountLimitsSheet: View {
                         .foregroundStyle(CodexUsageViewerPalette.lilac)
                 }
 
-                if account.provider == .codex {
+                if account.hasEarnedResets {
                     AccountResourcesView(account: account, now: context.date)
                 }
 

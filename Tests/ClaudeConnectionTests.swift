@@ -63,6 +63,8 @@ final class ClaudeConnectionTests: XCTestCase {
                     time.sleep(60)
                 else:
                     time.sleep(0.15)
+        elif sys.argv[1:] == ['--version']:
+            print('2.1.400 (Claude Code)', flush=True)
         elif sys.argv[1:3] == ['auth', 'logout']:
             open(os.path.join(folder, 'logout'), 'w').write('yes')
         """
@@ -303,8 +305,9 @@ final class ClaudeConnectionTests: XCTestCase {
             XCTAssertEqual(directory, fixture.root.appendingPathComponent("account-1", isDirectory: true))
             return ClaudeOAuthCredential(accessToken: "fixture", refreshToken: nil, expiresAt: .now.addingTimeInterval(600), scopes: [])
         }, fetch: { request in
-            XCTAssertEqual(request.url?.absoluteString, "https://api.anthropic.com/api/oauth/usage")
+            XCTAssertEqual(request.url?.absoluteString, "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "claude-cli/2.1.400 (external, cli)")
             let data = Data(#"{"five_hour":{"utilization":22.5,"resets_at":"2030-01-02T03:04:05.000Z"},"seven_day":{"utilization":40,"resets_at":"2030-01-04T03:04:05Z"},"seven_day_opus":null}"#.utf8)
             return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         })
@@ -395,6 +398,34 @@ final class ClaudeConnectionTests: XCTestCase {
         }
         let noReset = try ClaudeUsageParser.parse(Data(#"{"seven_day":{"utilization":0}}"#.utf8))
         XCTAssertNil(noReset.rateLimits.secondary?.resetDate)
+    }
+
+    func testFableLimitAndEarnedResetsAreSeparate() throws {
+        let data = Data(#"""
+        {"seven_day":{"utilization":40},"limits":[{"kind":"session"},
+         {"kind":"weekly_scoped","group":"weekly","percent":75,"resets_at":"2030-01-05T00:00:00Z","scope":{"model":{"display_name":"Fable"}}}],
+         "cedar_ember":{"eligible":true,"grants":[
+           {"id":"a","resets_left":2,"ends_at":"2030-02-01T00:00:00Z","clears":["five_hour","seven_day"],"type":"full"},
+           {"id":"b","resets_left":1,"ends_at":"2030-01-20T00:00:00Z","clears":[],"gives_back_weekly":true},
+           {"id":"c","resets_left":4,"ends_at":"2030-01-10T00:00:00Z","clears":["five_hour"],"paused":true},
+           {"id":"d","resets_left":0,"ends_at":"2030-01-01T00:00:00Z","clears":["seven_day"]}]}}
+        """#.utf8)
+        let limits = try ClaudeUsageParser.parse(data)
+        let fable = try XCTUnwrap(limits.buckets.first { $0.id == "claude_fable" })
+        XCTAssertEqual(fable.title, "Fable")
+        XCTAssertEqual(fable.secondary?.remainingPercent, 25)
+        XCTAssertEqual(fable.secondary?.resetsAt, 1_893_801_600)
+        XCTAssertEqual(limits.rateLimitResetCredits, RateLimitResetCredits(availableCount: 2, earliestExpiresAt: 1_896_134_400))
+        XCTAssertEqual(limits.fableResetCredits, RateLimitResetCredits(availableCount: 1, earliestExpiresAt: 1_895_097_600))
+
+        let ineligible = try ClaudeUsageParser.parse(Data(#"{"cedar_ember":{"eligible":false}}"#.utf8))
+        XCTAssertNil(ineligible.rateLimitResetCredits, "No grant list means resets are unknown")
+        let changed = try ClaudeUsageParser.parse(Data(#"{"seven_day":{"utilization":5},"limits":{"new":1},"cedar_ember":{"grants":[{"id":"x"}]}}"#.utf8))
+        XCTAssertEqual(changed.rateLimits.secondary?.usedPercent, 5, "Optional sections never block regular usage")
+        XCTAssertNil(changed.fableResetCredits)
+        XCTAssertNil(changed.buckets.first { $0.id == "claude_fable" })
+        let noGrants = try ClaudeUsageParser.parse(Data(#"{"cedar_ember":{"eligible":true,"grants":[]}}"#.utf8))
+        XCTAssertEqual(noGrants.fableResetCredits?.availableCount, 0)
     }
 
     func testEnvironmentRemovesOverridesAndKeepsPrivateConfig() {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derive display versions from VERSION and the nearest reachable release tag."""
+"""Display version: <nearest release tag>-<commits since it>; VERSION before the first tag."""
 import argparse
 import json
 import plistlib
@@ -27,7 +27,7 @@ def version_info(root=ROOT):
             args += ["--match", candidate]
         tag = git(root, *args)
     count = int(git(root, "rev-list", "--count", f"{tag}..HEAD" if tag else "HEAD"))
-    display = base if tag == base and count == 0 else f"{base}-{count}"
+    display = f"{tag or base}-{count}"
     return {"base": base, "display": display, "commitsSinceRelease": count,
             "releaseTag": tag, "commit": git(root, "rev-parse", "HEAD"),
             "build": str(int(git(root, "rev-list", "--count", "HEAD")))}

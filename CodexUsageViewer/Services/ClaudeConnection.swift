@@ -22,6 +22,7 @@ final class ClaudeConnection: CodexAccountConnection {
     private var loginState: String?
     private var loginCodeSubmitted = false
     private var generation = UUID()
+    private var userAgent: String?
 
     nonisolated static var accountRoot: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -103,6 +104,12 @@ final class ClaudeConnection: CodexAccountConnection {
         guard var credential = try await credential(in: directory) else { throw ClaudeConnectionError.signInRequired }
         if credential.expiresAt.map({ $0 <= Date().addingTimeInterval(60) }) ?? true {
             credential = try await renew(credential, directory: directory)
+        }
+        if userAgent == nil {
+            // The usage endpoint reports earned resets only to Claude Code's client identity.
+            let output = try await run(["--version"]).data
+            let version = String(decoding: output, as: UTF8.self).split(separator: " ").first.map(String.init) ?? ""
+            userAgent = "claude-cli/\(version.range(of: #"\A[0-9A-Za-z.+-]{1,40}\z"#, options: .regularExpression) == nil ? "unknown" : version) (external, cli)"
         }
         try ensureCurrent(attempt)
         let (data, response) = try await usageRequest(token: credential.accessToken)
@@ -339,11 +346,12 @@ final class ClaudeConnection: CodexAccountConnection {
     }
 
     private func usageRequest(token: String) async throws -> (Data, HTTPURLResponse) {
-        var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
+        var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")!)
         request.timeoutInterval = requestTimeout
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         if let fetchUsage { return try await fetchUsage(request) }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
@@ -513,31 +521,50 @@ enum ClaudeUsageParser {
             let seven_day_opus: Window?
             let seven_day_sonnet: Window?
         }
+        // Model-scoped limits and earned resets are optional; a shape change leaves them unknown.
+        struct Model: Decodable { let display_name: String? }
+        struct Scope: Decodable { let model: Model? }
+        struct Limit: Decodable { let kind: String?; let percent: Double?; let resets_at: String?; let scope: Scope? }
+        struct Grant: Decodable { let resets_left: Int; let ends_at: String?; let paused: Bool?; let gives_back_weekly: Bool? }
+        struct Resets: Decodable { let grants: [Grant]? }
+        struct Extras: Decodable { let limits: [Limit]?; let cedar_ember: Resets? }
         guard data.count <= 1_048_576, let usage = try? JSONDecoder().decode(Usage.self, from: data) else {
             throw ClaudeConnectionError.invalidResponse
+        }
+        let extras = try? JSONDecoder().decode(Extras.self, from: data)
+        func timestamp(_ string: String) throws -> Int {
+            let format = ISO8601DateFormatter()
+            format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            guard let date = format.date(from: string) ?? ISO8601DateFormatter().date(from: string),
+                  date.timeIntervalSince1970 >= 0, date.timeIntervalSince1970 < Double(Int.max) else {
+                throw ClaudeConnectionError.invalidResponse
+            }
+            return Int(date.timeIntervalSince1970)
         }
         func window(_ value: Window?, minutes: Int) throws -> QuotaWindow? {
             guard let value else { return nil }
             guard value.utilization.isFinite, value.utilization >= 0 else { throw ClaudeConnectionError.invalidResponse }
-            var reset: Int?
-            if let string = value.resets_at {
-                let format = ISO8601DateFormatter()
-                format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                let date = format.date(from: string) ?? ISO8601DateFormatter().date(from: string)
-                guard let date, date.timeIntervalSince1970 >= 0, date.timeIntervalSince1970 < Double(Int.max) else {
-                    throw ClaudeConnectionError.invalidResponse
-                }
-                reset = Int(date.timeIntervalSince1970)
-            }
-            return QuotaWindow(usedPercent: value.utilization, windowDurationMins: minutes, resetsAt: reset)
+            return QuotaWindow(usedPercent: value.utilization, windowDurationMins: minutes, resetsAt: try value.resets_at.map(timestamp))
+        }
+        // Earned resets: a Fable reset gives back Fable usage; all others refill regular limits.
+        func resets(fable: Bool) throws -> RateLimitResetCredits? {
+            guard let grants = extras?.cedar_ember?.grants else { return nil }
+            let held = grants.filter { ($0.gives_back_weekly ?? false) == fable && !($0.paused ?? false) && $0.resets_left > 0 }
+            return RateLimitResetCredits(availableCount: held.reduce(0) { $0 + $1.resets_left },
+                                         earliestExpiresAt: try held.compactMap { try $0.ends_at.map(timestamp) }.min())
         }
         let primary = try UsageBucket(limitId: "claude", limitName: "Claude", primary: window(usage.five_hour, minutes: 300),
                                       secondary: window(usage.seven_day, minutes: 10_080))
-        var buckets = ["claude": primary]
-        for (id, name, value) in [("claude_opus", "Opus", usage.seven_day_opus), ("claude_sonnet", "Sonnet", usage.seven_day_sonnet)] {
-            if let quota = try window(value, minutes: 10_080) { buckets[id] = UsageBucket(limitId: id, limitName: name, secondary: quota) }
+        let fable = extras?.limits?.first {
+            $0.kind == "weekly_scoped" && $0.scope?.model?.display_name?.lowercased().hasPrefix("fable") == true
         }
-        return RateLimitsResponse(rateLimits: primary, rateLimitsByLimitId: buckets)
+        var buckets = ["claude": primary]
+        for (id, name, value) in [("claude_fable", "Fable", fable?.percent.map { Window(utilization: $0, resets_at: fable?.resets_at) }),
+                                  ("claude_opus", "Opus", usage.seven_day_opus), ("claude_sonnet", "Sonnet", usage.seven_day_sonnet)] {
+            if let quota = try? window(value, minutes: 10_080) { buckets[id] = UsageBucket(limitId: id, limitName: name, secondary: quota) }
+        }
+        return RateLimitsResponse(rateLimits: primary, rateLimitsByLimitId: buckets,
+                                  rateLimitResetCredits: try? resets(fable: false), fableResetCredits: try? resets(fable: true))
     }
 }
 
