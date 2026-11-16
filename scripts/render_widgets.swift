@@ -71,7 +71,7 @@ struct RenderWidgets {
         Covers five-hour and weekly quotas in either slot, independently expired limits,
         single-window accounts, disconnected/stale accounts, missing reset times, long names,
         local-account icons, subscription tiers/fallbacks, zero/unknown/unlimited/expired resources,
-        Claude purchased credits (including zero, unavailable, and stale balances),
+        hidden Claude purchased balances (including zero, unavailable, and stale values),
         Fable limits and Fable/regular earned resets,
         and one, two, or three accounts mixing Claude and Codex.
         """

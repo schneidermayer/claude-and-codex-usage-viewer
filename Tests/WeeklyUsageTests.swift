@@ -158,37 +158,47 @@ final class WeeklyUsageTests: XCTestCase {
         XCTAssertFalse(snapshot.isLocalAccount(value, at: now.addingTimeInterval(2)))
     }
 
-    func testClaudeCreditsRetainCurrencyAndTheirOwnPlaceBesideFableAndResets() {
+    func testClaudeWidgetsKeepFableAndResetsWithoutPurchasedCredits() {
         var value = account(primary: nil, secondary: weekly())
         value.provider = .claude
         value.buckets[0].limitId = "claude"
-        value.buckets[0].credits = CreditBalance(hasCredits: true, unlimited: false, balance: "42.75", currency: "EUR")
         value.buckets.append(UsageBucket(limitId: "claude_fable", secondary: weekly()))
         value.resetCredits = RateLimitResetCredits(availableCount: 12)
         value.fableResetCredits = RateLimitResetCredits(availableCount: 3)
 
-        let resources = value.widgetResources(at: now, short: false)
-        XCTAssertEqual(resources.map(\.symbol), ["c.circle", "sparkles", "arrow.counterclockwise", "sparkle"])
-        XCTAssertEqual(resources.map(\.text), ["€42.75", "58%", "12", "3"])
-        XCTAssertEqual(resources.first?.label, "Available credits: 42.75 EUR")
-        let rows = value.widgetResourceRows(at: now, short: true, stacked: true)
-        XCTAssertEqual(rows.map { $0.map(\.symbol) }, [["c.circle", "sparkles"], ["arrow.counterclockwise", "sparkle"]])
+        let balances: [CreditBalance?] = [
+            CreditBalance(hasCredits: true, unlimited: false, balance: "42.75", currency: "EUR"),
+            CreditBalance(hasCredits: false, unlimited: false, balance: "0", currency: "USD"),
+            nil
+        ]
+        for balance in balances {
+            value.buckets[0].credits = balance
+            for short in [false, true] {
+                let resources = value.widgetResources(at: now, short: short)
+                XCTAssertEqual(resources.map(\.symbol), ["sparkles", "arrow.counterclockwise", "sparkle"])
+                XCTAssertEqual(resources.map(\.text), ["58%", "12", "3"])
+            }
+        }
 
         value.updatedAt = now.addingTimeInterval(-601)
-        XCTAssertEqual(value.widgetResources(at: now, short: true).map(\.text), ["—", "—", "—", "—"])
+        XCTAssertEqual(value.widgetResources(at: now, short: true).map(\.text), ["—", "—", "—"])
     }
 
-    func testCreditOnlyClaudeAccountsKeepAnExplicitUnknownBalanceAndAlignedEmptyResetRow() {
+    func testWidgetCreditsRemainAvailableForCodexOnly() {
         var value = account(primary: nil, secondary: weekly())
+        value.buckets[0].credits = CreditBalance(hasCredits: true, unlimited: false, balance: "42.75")
+        let codexResources = value.widgetResources(at: now, short: false)
+        XCTAssertEqual(codexResources.map(\.symbol), ["c.circle", "arrow.counterclockwise"])
+        XCTAssertEqual(codexResources.map(\.text), ["42.75", "—"])
+
         value.provider = .claude
         value.buckets[0].limitId = "claude"
-        let rows = value.widgetResourceRows(at: now, short: true, stacked: true)
-        XCTAssertEqual(rows.map(\.count), [1, 0])
-        XCTAssertEqual(rows.first?.first?.text, "—")
-        XCTAssertEqual(rows.first?.first?.label, "Available credits: Unknown")
-
+        value.buckets[0].credits?.currency = "EUR"
+        XCTAssertEqual(value.creditsValue(at: now), .currency(amount: "42.75", code: "EUR"), "The app retains the balance")
+        XCTAssertTrue(value.widgetResources(at: now, short: true).isEmpty)
         value.buckets[0].credits = CreditBalance(hasCredits: false, unlimited: false, balance: "0", currency: "USD")
-        XCTAssertEqual(value.widgetResources(at: now, short: true).map(\.text), ["$0"])
-        XCTAssertEqual(value.widgetResourceRows(at: now, short: false, stacked: false).map(\.count), [1])
+        XCTAssertTrue(value.widgetResources(at: now, short: true).isEmpty)
+        value.buckets[0].credits = nil
+        XCTAssertTrue(value.widgetResources(at: now, short: true).isEmpty)
     }
 }

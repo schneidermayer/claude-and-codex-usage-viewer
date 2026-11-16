@@ -48,14 +48,14 @@ final class UsageModelsTests: XCTestCase {
         XCTAssertEqual(account.resetExpiry(fable: true, at: resourceNow), Date(timeIntervalSince1970: 1_900_000_300))
         XCTAssertNil(account.resetExpiry(fable: true, at: resourceNow.addingTimeInterval(300)), "An expired Fable reset is unknown")
         XCTAssertEqual(account.resetExpiry(at: resourceNow.addingTimeInterval(300)), Date(timeIntervalSince1970: 1_900_000_900))
-        XCTAssertEqual(account.widgetResources(at: resourceNow, short: false).map(\.text), ["—", "30%", "2", "1"])
+        XCTAssertEqual(account.widgetResources(at: resourceNow, short: false).map(\.text), ["30%", "2", "1"])
 
         account.resetCredits = nil
         account.fableResetCredits = nil
         XCTAssertFalse(account.hasEarnedResets)
-        XCTAssertEqual(account.widgetResources(at: resourceNow, short: false).map(\.text), ["—", "30%"])
+        XCTAssertEqual(account.widgetResources(at: resourceNow, short: false).map(\.text), ["30%"])
         account.buckets.removeLast()
-        XCTAssertEqual(account.widgetResources(at: resourceNow, short: false).map(\.text), ["—"])
+        XCTAssertTrue(account.widgetResources(at: resourceNow, short: false).isEmpty)
     }
 
     func testClaudePurchasedCreditsPreserveCurrencyAndRequireFreshData() throws {
