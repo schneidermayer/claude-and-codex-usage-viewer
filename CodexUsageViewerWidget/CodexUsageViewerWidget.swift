@@ -88,8 +88,8 @@ private func usageConfiguration(size: CodexUsageViewerWidgetSize) -> some Widget
     }
     .configurationDisplayName(size.name)
     .description(size == .dashboard
-                 ? "Detailed account cards with five-hour and weekly usage, reset countdowns, Claude Fable limits, and earned resets."
-                 : "Five-hour and weekly usage with reset countdowns for one to three Claude or Codex accounts, plus Claude Fable limits, Codex credits, and earned resets.")
+                 ? "Detailed account cards with five-hour and weekly usage, reset countdowns, credits, Claude Fable limits, and earned resets."
+                 : "Five-hour and weekly usage with reset countdowns for one to three Claude or Codex accounts, plus credits, Claude Fable limits, and earned resets.")
     .supportedFamilies([size.family])
     .contentMarginsDisabled()
 }

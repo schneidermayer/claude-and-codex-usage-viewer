@@ -71,7 +71,8 @@ struct RenderWidgets {
         Covers five-hour and weekly quotas in either slot, independently expired limits,
         single-window accounts, disconnected/stale accounts, missing reset times, long names,
         local-account icons, subscription tiers/fallbacks, zero/unknown/unlimited/expired resources,
-        Claude Fable limits and Fable/regular earned resets,
+        Claude purchased credits (including zero, unavailable, and stale balances),
+        Fable limits and Fable/regular earned resets,
         and one, two, or three accounts mixing Claude and Codex.
         """
         try readme.write(to: output.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
@@ -192,6 +193,37 @@ struct RenderWidgets {
         allClaude.accounts[0].fableResetCredits = RateLimitResetCredits(availableCount: 0)
         allClaude.accounts[2].resetCredits = nil
         allClaude.accounts[2].fableResetCredits = nil
+        var claudeCredits = allClaude
+        for index in claudeCredits.accounts.indices {
+            claudeCredits.accounts[index].buckets[0].credits = CreditBalance(
+                hasCredits: index == 0, unlimited: false, balance: ["25.5", "0", "0"][index], currency: "USD")
+        }
+        claudeCredits.accounts[2].buckets[0].credits = nil
+        var claudeCreditsOnly = singleClaude
+        claudeCreditsOnly.accounts[0].buckets[0].credits = CreditBalance(
+            hasCredits: true, unlimited: false, balance: "125.75", currency: "USD")
+        claudeCreditsOnly.accounts[0].buckets.removeAll { $0.id == "claude_fable" }
+        claudeCreditsOnly.accounts[0].fableResetCredits = nil
+        var claudeCreditsStale = claudeCredits
+        claudeCreditsStale.accounts[0].updatedAt = now.addingTimeInterval(-CodexUsageViewerConstants.staleInterval - 60)
+        claudeCreditsStale.accounts[1].issue = "The latest credit balance could not be loaded."
+        var mixedCredits = twoAccounts
+        mixedCredits.accounts[1].buckets[0].credits = CreditBalance(
+            hasCredits: true, unlimited: false, balance: "999.99", currency: "USD")
+        var claudeCurrencies = allClaude
+        for index in claudeCurrencies.accounts.indices {
+            claudeCurrencies.accounts[index].buckets[0].credits = CreditBalance(
+                hasCredits: true, unlimited: false, balance: ["42.75", "15.5", "1234"][index],
+                currency: ["EUR", "USD", "JPY"][index])
+            if claudeCurrencies.accounts[index].fableWindow == nil {
+                claudeCurrencies.accounts[index].buckets.append(UsageBucket(
+                    limitId: "claude_fable", limitName: "Fable", secondary: QuotaWindow(
+                        usedPercent: 32, windowDurationMins: 10_080,
+                        resetsAt: Int(now.timeIntervalSince1970) + 90_000)))
+            }
+            claudeCurrencies.accounts[index].resetCredits = RateLimitResetCredits(availableCount: 12)
+            claudeCurrencies.accounts[index].fableResetCredits = RateLimitResetCredits(availableCount: 3)
+        }
         var oneCodex = connected
         oneCodex.accounts = [connected.accounts[0]]
         var sessionOnly = connected
@@ -261,6 +293,11 @@ struct RenderWidgets {
             ("one-claude", singleClaude),
             ("two-mixed", twoAccounts),
             ("three-claude", allClaude),
+            ("claude-credits", claudeCredits),
+            ("claude-credits-only", claudeCreditsOnly),
+            ("claude-credits-stale", claudeCreditsStale),
+            ("mixed-credits", mixedCredits),
+            ("claude-currencies", claudeCurrencies),
             ("empty", UsageSnapshot(accounts: [AccountSnapshot.emptyAccounts[0]], savedAt: now)),
             ("three-empty", UsageSnapshot(accounts: AccountSnapshot.emptyAccounts, savedAt: now)),
             ("attention", attention),

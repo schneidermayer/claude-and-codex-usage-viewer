@@ -150,7 +150,7 @@ struct WidgetResource: Hashable {
 }
 
 extension AccountSnapshot {
-    /// Codex: credits and resets. Claude: Fable limit, regular resets, and Fable resets.
+    /// Credits precede provider-specific limits and earned resets.
     func widgetResources(at date: Date, short: Bool) -> [WidgetResource] {
         func item(_ symbol: String, _ value: AccountResourceValue, _ label: String, trailing: Bool) -> WidgetResource {
             WidgetResource(symbol: symbol, text: value.widgetText(short: short), label: "\(label): \(value.accessibilityText)", trailing: trailing)
@@ -159,7 +159,7 @@ extension AccountSnapshot {
         if provider == .codex {
             return [item("c.circle", creditsValue(at: date), "Available credits", trailing: false), resets]
         }
-        var items: [WidgetResource] = []
+        var items = [item("c.circle", creditsValue(at: date), "Available credits", trailing: false)]
         if let fable = fableWindow {
             let remaining = usage(for: fable, at: date).window?.remainingPercent
             items.append(WidgetResource(symbol: "sparkles", text: remaining.map { "\($0)%" } ?? "—",
@@ -169,6 +169,14 @@ extension AccountSnapshot {
             items += [resets, item("sparkle", resetsValue(fable: true, at: date), "Available Fable resets", trailing: true)]
         }
         return items
+    }
+
+    /// Narrow Small columns keep balances and limits above the earned resets.
+    /// Every column reserves the same rows so quota panels stay aligned.
+    func widgetResourceRows(at date: Date, short: Bool, stacked: Bool) -> [[WidgetResource]] {
+        let items = widgetResources(at: date, short: short)
+        guard stacked else { return [items] }
+        return [items.filter { !$0.trailing }, items.filter(\.trailing)]
     }
 }
 

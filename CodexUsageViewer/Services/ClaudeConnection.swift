@@ -118,7 +118,20 @@ final class ClaudeConnection: CodexAccountConnection {
             if response.statusCode == 401 || response.statusCode == 403 { throw ClaudeConnectionError.signInRequired }
             throw ClaudeConnectionError.http(response.statusCode)
         }
-        return try ClaudeUsageParser.parse(data)
+        var limits = try ClaudeUsageParser.parse(data)
+        // Purchased credits are a separate prepaid balance, not monthly spend-limit headroom.
+        // Billing data is optional so an unavailable balance never hides the plan's usage windows.
+        do {
+            let credits = try await readCredits(token: credential.accessToken, attempt: attempt)
+            try ensureCurrent(attempt)
+            limits.rateLimits.credits = credits
+            if var primary = limits.rateLimitsByLimitId?["claude"] {
+                primary.credits = credits
+                limits.rateLimitsByLimitId?["claude"] = primary
+            }
+        } catch is CancellationError { throw CancellationError() }
+        catch { try ensureCurrent(attempt) }
+        return limits
     }
 
     private func renew(_ credential: ClaudeOAuthCredential, directory: URL) async throws -> ClaudeOAuthCredential {
@@ -352,7 +365,44 @@ final class ClaudeConnection: CodexAccountConnection {
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        if let fetchUsage { return try await fetchUsage(request) }
+        return try await apiRequest(request)
+    }
+
+    private func readCredits(token: String, attempt: UUID) async throws -> CreditBalance? {
+        // Match Claude Code 2.1.325's read-only OAuth profile and prepaid/credits requests.
+        var profile = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/profile")!)
+        profile.timeoutInterval = min(requestTimeout, 10)
+        profile.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        profile.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        profile.setValue("application/json", forHTTPHeaderField: "Accept")
+        profile.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        profile.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await apiRequest(profile)
+        try ensureCurrent(attempt)
+        guard response.statusCode == 200,
+              let organization = ClaudeCreditParser.organization(from: data) else { return nil }
+
+        var prepaid = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/organizations/\(organization)/prepaid/credits")!)
+        prepaid.timeoutInterval = min(requestTimeout, 5)
+        prepaid.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        prepaid.setValue(organization, forHTTPHeaderField: "x-organization-uuid")
+        prepaid.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        prepaid.setValue("claude_code_cli", forHTTPHeaderField: "anthropic-client-platform")
+        prepaid.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        prepaid.setValue("application/json", forHTTPHeaderField: "Accept")
+        prepaid.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        let (balance, balanceResponse) = try await apiRequest(prepaid)
+        try ensureCurrent(attempt)
+        guard balanceResponse.statusCode == 200 else { return nil }
+        return ClaudeCreditParser.parse(balance)
+    }
+
+    private func apiRequest(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        if let fetchUsage {
+            let result = try await fetchUsage(request)
+            guard result.0.count <= 1_048_576 else { throw ClaudeConnectionError.invalidResponse }
+            return result
+        }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
@@ -509,6 +559,33 @@ struct ClaudeOAuthCredential {
               oauth.expiresAt.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw ClaudeConnectionError.invalidResponse }
         return Self(accessToken: oauth.accessToken, refreshToken: oauth.refreshToken,
                     expiresAt: oauth.expiresAt.map { Date(timeIntervalSince1970: $0 / 1000) }, scopes: oauth.scopes ?? [])
+    }
+}
+
+enum ClaudeCreditParser {
+    /// Resolve the organization from the official profile for this same app-owned OAuth token.
+    static func organization(from data: Data) -> String? {
+        struct Account: Decodable { let uuid: String; let email: String }
+        struct Organization: Decodable { let uuid: String }
+        struct Profile: Decodable { let account: Account; let organization: Organization }
+        guard data.count <= 1_048_576, let profile = try? JSONDecoder().decode(Profile.self, from: data),
+              !profile.account.uuid.isEmpty, !profile.account.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              profile.organization.uuid.range(of: #"\A[A-Za-z0-9_-]{1,128}\z"#, options: .regularExpression) != nil else { return nil }
+        return profile.organization.uuid
+    }
+
+    static func parse(_ data: Data) -> CreditBalance? {
+        struct Balance: Decodable { let amount: Decimal; let currency: String }
+        guard data.count <= 1_048_576, let prepaid = try? JSONDecoder().decode(Balance.self, from: data),
+              !prepaid.amount.isNaN,
+              prepaid.currency.range(of: #"\A[A-Za-z]{3}\z"#, options: .regularExpression) != nil else { return nil }
+        let currency = prepaid.currency.uppercased()
+        // Claude Code's balance formatter treats `amount` as minor units, with these
+        // zero-decimal currencies; it never derives prepaid funds from a monthly cap.
+        let divisor = ["JPY", "KRW", "VND"].contains(currency) ? Decimal(1) : Decimal(100)
+        let amount = max(0, prepaid.amount) / divisor
+        return CreditBalance(hasCredits: amount > 0, unlimited: false,
+                             balance: NSDecimalNumber(decimal: amount).stringValue, currency: currency)
     }
 }
 

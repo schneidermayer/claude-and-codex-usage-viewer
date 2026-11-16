@@ -157,4 +157,38 @@ final class WeeklyUsageTests: XCTestCase {
         XCTAssertTrue(snapshot.isLocalAccount(value, at: now.addingTimeInterval(1)))
         XCTAssertFalse(snapshot.isLocalAccount(value, at: now.addingTimeInterval(2)))
     }
+
+    func testClaudeCreditsRetainCurrencyAndTheirOwnPlaceBesideFableAndResets() {
+        var value = account(primary: nil, secondary: weekly())
+        value.provider = .claude
+        value.buckets[0].limitId = "claude"
+        value.buckets[0].credits = CreditBalance(hasCredits: true, unlimited: false, balance: "42.75", currency: "EUR")
+        value.buckets.append(UsageBucket(limitId: "claude_fable", secondary: weekly()))
+        value.resetCredits = RateLimitResetCredits(availableCount: 12)
+        value.fableResetCredits = RateLimitResetCredits(availableCount: 3)
+
+        let resources = value.widgetResources(at: now, short: false)
+        XCTAssertEqual(resources.map(\.symbol), ["c.circle", "sparkles", "arrow.counterclockwise", "sparkle"])
+        XCTAssertEqual(resources.map(\.text), ["€42.75", "58%", "12", "3"])
+        XCTAssertEqual(resources.first?.label, "Available credits: 42.75 EUR")
+        let rows = value.widgetResourceRows(at: now, short: true, stacked: true)
+        XCTAssertEqual(rows.map { $0.map(\.symbol) }, [["c.circle", "sparkles"], ["arrow.counterclockwise", "sparkle"]])
+
+        value.updatedAt = now.addingTimeInterval(-601)
+        XCTAssertEqual(value.widgetResources(at: now, short: true).map(\.text), ["—", "—", "—", "—"])
+    }
+
+    func testCreditOnlyClaudeAccountsKeepAnExplicitUnknownBalanceAndAlignedEmptyResetRow() {
+        var value = account(primary: nil, secondary: weekly())
+        value.provider = .claude
+        value.buckets[0].limitId = "claude"
+        let rows = value.widgetResourceRows(at: now, short: true, stacked: true)
+        XCTAssertEqual(rows.map(\.count), [1, 0])
+        XCTAssertEqual(rows.first?.first?.text, "—")
+        XCTAssertEqual(rows.first?.first?.label, "Available credits: Unknown")
+
+        value.buckets[0].credits = CreditBalance(hasCredits: false, unlimited: false, balance: "0", currency: "USD")
+        XCTAssertEqual(value.widgetResources(at: now, short: true).map(\.text), ["$0"])
+        XCTAssertEqual(value.widgetResourceRows(at: now, short: false, stacked: false).map(\.count), [1])
+    }
 }

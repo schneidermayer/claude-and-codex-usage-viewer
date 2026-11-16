@@ -48,14 +48,50 @@ final class UsageModelsTests: XCTestCase {
         XCTAssertEqual(account.resetExpiry(fable: true, at: resourceNow), Date(timeIntervalSince1970: 1_900_000_300))
         XCTAssertNil(account.resetExpiry(fable: true, at: resourceNow.addingTimeInterval(300)), "An expired Fable reset is unknown")
         XCTAssertEqual(account.resetExpiry(at: resourceNow.addingTimeInterval(300)), Date(timeIntervalSince1970: 1_900_000_900))
-        XCTAssertEqual(account.widgetResources(at: resourceNow, short: false).map(\.text), ["30%", "2", "1"])
+        XCTAssertEqual(account.widgetResources(at: resourceNow, short: false).map(\.text), ["—", "30%", "2", "1"])
 
         account.resetCredits = nil
         account.fableResetCredits = nil
         XCTAssertFalse(account.hasEarnedResets)
-        XCTAssertEqual(account.widgetResources(at: resourceNow, short: false).map(\.text), ["30%"])
+        XCTAssertEqual(account.widgetResources(at: resourceNow, short: false).map(\.text), ["—", "30%"])
         account.buckets.removeLast()
-        XCTAssertTrue(account.widgetResources(at: resourceNow, short: false).isEmpty)
+        XCTAssertEqual(account.widgetResources(at: resourceNow, short: false).map(\.text), ["—"])
+    }
+
+    func testClaudePurchasedCreditsPreserveCurrencyAndRequireFreshData() throws {
+        var account = resourceAccount(credits: CreditBalance(hasCredits: true, unlimited: false, balance: "25.5", currency: "USD"))
+        account.provider = .claude
+        account.buckets[0].limitId = "claude"
+        let value = account.creditsValue(at: resourceNow)
+        XCTAssertEqual(value, .currency(amount: "25.5", code: "USD"))
+        XCTAssertEqual(value.text, "$25.50")
+        XCTAssertEqual(value.compactText, "$25.5")
+        XCTAssertEqual(value.accessibilityText, "25.5 USD")
+        let decoded = try JSONDecoder().decode(AccountSnapshot.self, from: JSONEncoder().encode(account))
+        XCTAssertEqual(decoded.creditsValue(at: resourceNow), value, "Currency survives the sanitized widget snapshot")
+
+        account.buckets[0].credits = CreditBalance(hasCredits: false, unlimited: false, balance: "0", currency: "EUR")
+        XCTAssertEqual(account.creditsValue(at: resourceNow).text, "€0.00")
+        XCTAssertEqual(AccountResourceValue.currency(amount: "1200", code: "JPY").text, "¥1,200")
+        XCTAssertEqual(AccountResourceValue.currency(amount: "71999.99", code: "USD").shortText, "$71k")
+        XCTAssertEqual(AccountResourceValue.currency(amount: "0.001", code: "USD").text, "$<0.01")
+        account.updatedAt = resourceNow.addingTimeInterval(-601)
+        XCTAssertEqual(account.creditsValue(at: resourceNow), .unknown)
+        account.updatedAt = resourceNow
+        account.issue = "Offline"
+        XCTAssertEqual(account.creditsValue(at: resourceNow), .unknown)
+        account.issue = nil
+        account.state = .disconnected
+        XCTAssertEqual(account.creditsValue(at: resourceNow), .unknown)
+        account.state = .connected
+        account.buckets[0].credits?.currency = nil
+        XCTAssertEqual(account.creditsValue(at: resourceNow), .unknown, "A Claude monetary balance needs a reported currency")
+    }
+
+    func testLegacyCodexCreditSnapshotDoesNotRequireCurrency() throws {
+        let credits = try JSONDecoder().decode(CreditBalance.self, from: Data(#"{"hasCredits":true,"unlimited":false,"balance":"12"}"#.utf8))
+        XCTAssertNil(credits.currency)
+        XCTAssertEqual(resourceAccount(credits: credits).creditsValue(at: resourceNow), .amount("12"))
     }
 
     func testCreditsDistinguishReportedZeroAvailabilityUnlimitedAndUnknown() {

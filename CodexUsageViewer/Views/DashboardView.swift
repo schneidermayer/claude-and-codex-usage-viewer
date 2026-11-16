@@ -416,10 +416,8 @@ private struct AccountCard: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 233)
             }
-            if account.hasEarnedResets {
-                AccountResourcesView(account: account, now: now)
-                    .padding(.top, 16)
-            }
+            AccountResourcesView(account: account, now: now)
+                .padding(.top, 16)
             Spacer(minLength: 12)
             HStack(spacing: 4) {
                 if account.issue != nil || account.isStale(at: now) || hasElapsedWindow(now: now) {
@@ -608,16 +606,20 @@ private struct AccountResourcesView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
+            resource("Credits", symbol: "c.circle", value: account.creditsValue(at: now), expiry: nil, key: "credits",
+                     description: account.provider == .claude
+                     ? "Purchased extra usage credit balance reported by this Claude account. Separate from its monthly spending limit."
+                     : "Available credit balance reported by this account.")
             if account.provider == .claude {
-                resource("Usage resets", symbol: "arrow.counterclockwise", value: account.resetsValue(at: now),
-                         expiry: .some(account.resetExpiry(at: now)), key: "availableResets",
-                         description: "Earned resets that refill the 5-hour or weekly limits.")
-                resource("Fable resets", symbol: "sparkle", value: account.resetsValue(fable: true, at: now),
-                         expiry: .some(account.resetExpiry(fable: true, at: now)), key: "fableResets",
-                         description: "Earned resets that give back what Fable used this week.")
+                if account.hasEarnedResets {
+                    resource("Usage resets", symbol: "arrow.counterclockwise", value: account.resetsValue(at: now),
+                             expiry: .some(account.resetExpiry(at: now)), key: "availableResets",
+                             description: "Earned resets that refill the 5-hour or weekly limits.")
+                    resource("Fable resets", symbol: "sparkle", value: account.resetsValue(fable: true, at: now),
+                             expiry: .some(account.resetExpiry(fable: true, at: now)), key: "fableResets",
+                             description: "Earned resets that give back what Fable used this week.")
+                }
             } else {
-                resource("Credits", symbol: "c.circle", value: account.creditsValue(at: now), expiry: nil, key: "credits",
-                         description: "Available credit balance reported by this account.")
                 resource("Usage resets", symbol: "arrow.counterclockwise", value: account.resetsValue(at: now),
                          expiry: .some(account.resetExpiry(at: now)), key: "availableResets",
                          description: "Earned usage resets available to use. Separate from the automatic reset countdowns.")
@@ -640,6 +642,7 @@ private struct AccountResourcesView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .minimumScaleFactor(0.75)
             Text(value.text)
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .monospacedDigit()
@@ -701,9 +704,7 @@ private struct AccountLimitsSheet: View {
                         .foregroundStyle(CodexUsageViewerPalette.lilac)
                 }
 
-                if account.hasEarnedResets {
-                    AccountResourcesView(account: account, now: context.date)
-                }
+                AccountResourcesView(account: account, now: context.date)
 
                 if let warning = historicalWarning(now: context.date) {
                     Label(warning, systemImage: "clock.badge.exclamationmark")

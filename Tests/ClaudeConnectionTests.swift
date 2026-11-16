@@ -305,9 +305,12 @@ final class ClaudeConnectionTests: XCTestCase {
             XCTAssertEqual(directory, fixture.root.appendingPathComponent("account-1", isDirectory: true))
             return ClaudeOAuthCredential(accessToken: "fixture", refreshToken: nil, expiresAt: .now.addingTimeInterval(600), scopes: [])
         }, fetch: { request in
-            XCTAssertEqual(request.url?.absoluteString, "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture")
             XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "claude-cli/2.1.400 (external, cli)")
+            if request.url?.path == "/api/oauth/profile" {
+                return (Data(), HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!)
+            }
+            XCTAssertEqual(request.url?.absoluteString, "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")
             let data = Data(#"{"five_hour":{"utilization":22.5,"resets_at":"2030-01-02T03:04:05.000Z"},"seven_day":{"utilization":40,"resets_at":"2030-01-04T03:04:05Z"},"seven_day_opus":null}"#.utf8)
             return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         })
@@ -318,6 +321,151 @@ final class ClaudeConnectionTests: XCTestCase {
         XCTAssertEqual(limits.rateLimits.secondary?.windowDurationMins, 10_080)
         XCTAssertNil(limits.rateLimits.credits)
         XCTAssertNil(limits.rateLimitResetCredits)
+    }
+
+    func testPrepaidBalanceUsesOfficialProfileAndNeverSpendLimitHeadroom() async throws {
+        let fixture = try fixture()
+        defer { fixture.remove() }
+        var paths: [String] = []
+        let connection = fixture.connection(load: { _ in
+            ClaudeOAuthCredential(accessToken: "fixture", refreshToken: nil, expiresAt: .now.addingTimeInterval(600), scopes: [])
+        }, fetch: { request in
+            let path = request.url!.path
+            paths.append(path)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "claude-cli/2.1.400 (external, cli)")
+            let body: String
+            switch path {
+            case "/api/oauth/usage":
+                body = #"{"seven_day":{"utilization":40},"extra_usage":{"is_enabled":true,"monthly_limit":100000,"used_credits":100}}"#
+            case "/api/oauth/profile":
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-cache")
+                XCTAssertNil(request.value(forHTTPHeaderField: "anthropic-beta"))
+                body = #"{"account":{"uuid":"account-fixture","email":"claude@example.com"},"organization":{"uuid":"org-fixture"}}"#
+            case "/api/oauth/organizations/org-fixture/prepaid/credits":
+                XCTAssertEqual(request.value(forHTTPHeaderField: "x-organization-uuid"), "org-fixture")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-client-platform"), "claude_code_cli")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+                body = #"{"amount":3275,"currency":"eur","auto_reload_settings":{"enabled":true},"expiry_policy_months":null}"#
+            default:
+                XCTFail("Unexpected account request")
+                throw ClaudeConnectionError.invalidResponse
+            }
+            return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        defer { connection.stop() }
+        let limits = try await connection.readLimits()
+        XCTAssertEqual(paths, ["/api/oauth/usage", "/api/oauth/profile", "/api/oauth/organizations/org-fixture/prepaid/credits"])
+        XCTAssertEqual(limits.rateLimits.credits, CreditBalance(hasCredits: true, unlimited: false, balance: "32.75", currency: "EUR"))
+        XCTAssertEqual(limits.buckets.first?.credits, limits.rateLimits.credits)
+        XCTAssertEqual(limits.rateLimits.secondary?.usedPercent, 40)
+    }
+
+    func testOptionalBillingFailuresPreservePlanUsage() async throws {
+        let fixture = try fixture()
+        defer { fixture.remove() }
+        for failure in ["profile-http", "profile-shape", "profile-network", "balance-http", "balance-shape", "balance-network"] {
+            var prepaidRequests = 0
+            let connection = fixture.connection(load: { _ in
+                ClaudeOAuthCredential(accessToken: "fixture", refreshToken: nil, expiresAt: .now.addingTimeInterval(600), scopes: [])
+            }, fetch: { request in
+                let path = request.url!.path
+                var status = 200
+                var body = #"{"seven_day":{"utilization":40},"extra_usage":{"monthly_limit":100000,"used_credits":0}}"#
+                if path == "/api/oauth/profile" {
+                    if failure == "profile-network" { throw ClaudeConnectionError.network }
+                    if failure == "profile-http" { status = 401 }
+                    body = failure == "profile-shape" ? #"{"organization":{"uuid":"org-fixture"}}"#
+                        : #"{"account":{"uuid":"account-fixture","email":"claude@example.com"},"organization":{"uuid":"org-fixture"}}"#
+                } else if path.hasSuffix("/prepaid/credits") {
+                    prepaidRequests += 1
+                    if failure == "balance-network" { throw ClaudeConnectionError.network }
+                    if failure == "balance-http" { status = 403 }
+                    body = failure == "balance-shape" ? #"{"amount":5000}"# : #"{"amount":5000,"currency":"USD"}"#
+                }
+                return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
+            })
+            let limits = try await connection.readLimits()
+            connection.stop()
+            XCTAssertEqual(limits.rateLimits.secondary?.usedPercent, 40, failure)
+            XCTAssertNil(limits.rateLimits.credits, failure)
+            XCTAssertEqual(prepaidRequests, failure.hasPrefix("profile") ? 0 : 1, failure)
+        }
+    }
+
+    func testPrepaidCurrencyMinorUnitsAndDepletedBalances() throws {
+        for (currency, amount, expected) in [("USD", "1234.567", "12.34567"), ("EUR", "2500", "25"),
+                                              ("JPY", "2500", "2500"), ("KRW", "2500", "2500"), ("VND", "2500", "2500"),
+                                              ("USD", "0", "0"), ("USD", "-25", "0")] {
+            let parsed = try XCTUnwrap(ClaudeCreditParser.parse(Data("{\"amount\":\(amount),\"currency\":\"\(currency)\"}".utf8)))
+            XCTAssertEqual(parsed.balance, expected)
+            XCTAssertEqual(parsed.currency, currency)
+            XCTAssertEqual(parsed.hasCredits, expected != "0")
+            XCTAssertFalse(parsed.unlimited)
+        }
+        for body in [#"{}"#, #"{"amount":null,"currency":"USD"}"#, #"{"amount":"100","currency":"USD"}"#,
+                     #"{"amount":true,"currency":"USD"}"#, #"{"amount":100}"#, #"{"amount":100,"currency":null}"#,
+                     #"{"amount":100,"currency":" US"}"#, #"{"amount":100,"currency":"USDD"}"#,
+                     #"{"amount":1e1000,"currency":"USD"}"#] {
+            XCTAssertNil(ClaudeCreditParser.parse(Data(body.utf8)), body)
+        }
+    }
+
+    func testCreditProfileRequiresIdentityAndSafeOrganizationPath() {
+        for body in [#"{}"#, #"{"organization":{"uuid":"org-fixture"}}"#,
+                     #"{"account":{"uuid":"account","email":""},"organization":{"uuid":"org-fixture"}}"#,
+                     #"{"account":{"uuid":"account","email":"a@example.com"},"organization":{"uuid":"../other"}}"#,
+                     #"{"account":{"uuid":"account","email":"a@example.com"},"organization":{"uuid":"org?query=1"}}"#] {
+            XCTAssertNil(ClaudeCreditParser.organization(from: Data(body.utf8)), body)
+        }
+    }
+
+    func testStoppedConnectionDiscardsInFlightBillingResponse() async throws {
+        let fixture = try fixture()
+        defer { fixture.remove() }
+        for stoppedPath in ["/api/oauth/profile", "/api/oauth/organizations/org-fixture/prepaid/credits"] {
+            var started = false
+            let connection = fixture.connection(load: { _ in
+                ClaudeOAuthCredential(accessToken: "fixture", refreshToken: nil, expiresAt: .now.addingTimeInterval(600), scopes: [])
+            }, fetch: { request in
+                let path = request.url!.path
+                if path == stoppedPath {
+                    started = true
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+                let body = path == "/api/oauth/usage" ? #"{"seven_day":{"utilization":40}}"#
+                    : path == "/api/oauth/profile" ? #"{"account":{"uuid":"account","email":"a@example.com"},"organization":{"uuid":"org-fixture"}}"#
+                    : #"{"amount":5000,"currency":"USD"}"#
+                return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+            let pending = Task { try await connection.readLimits() }
+            while !started { try await Task.sleep(for: .milliseconds(5)) }
+            connection.stop()
+            do { _ = try await pending.value; XCTFail("Expected stopped billing read") }
+            catch { XCTAssertEqual(error as? ClaudeConnectionError, .stopped, stoppedPath) }
+        }
+    }
+
+    func testCanceledBillingReadDoesNotReturnUsageAsSuccessfulRefresh() async throws {
+        let fixture = try fixture()
+        defer { fixture.remove() }
+        var started = false
+        let connection = fixture.connection(load: { _ in
+            ClaudeOAuthCredential(accessToken: "fixture", refreshToken: nil, expiresAt: .now.addingTimeInterval(600), scopes: [])
+        }, fetch: { request in
+            if request.url!.path == "/api/oauth/profile" {
+                started = true
+                try await Task.sleep(for: .seconds(5))
+            }
+            return (Data(#"{"seven_day":{"utilization":40}}"#.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        defer { connection.stop() }
+        let pending = Task { try await connection.readLimits() }
+        while !started { try await Task.sleep(for: .milliseconds(5)) }
+        pending.cancel()
+        do { _ = try await pending.value; XCTFail("Expected canceled billing read") }
+        catch { XCTAssertTrue(error is CancellationError) }
     }
 
     func testExpiredCredentialRenewsThroughCLI() async throws {

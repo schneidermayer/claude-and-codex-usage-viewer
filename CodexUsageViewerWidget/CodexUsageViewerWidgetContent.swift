@@ -14,6 +14,9 @@ struct CodexUsageViewerWidgetContent: View {
     private var accounts: [AccountSnapshot] { Array(snapshot.accounts.prefix(3)) }
     private var narrowColumns: Bool { isSmall && accounts.count == 3 }
     private var nameHeight: CGFloat { narrowColumns ? 14 : 16 }
+    private var stackedResources: Bool {
+        isSmall && accounts.count > 1 && accounts.contains { $0.widgetResources(at: referenceDate, short: true).count > 2 }
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -46,7 +49,7 @@ struct CodexUsageViewerWidgetContent: View {
 
     private func accountColumn(_ account: AccountSnapshot, height: CGFloat) -> some View {
         let color = accent(CodexUsageViewerPalette.index(for: account.id))
-        let resourcesHeight: CGFloat = isSmall ? 14 : 17
+        let resourcesHeight: CGFloat = isSmall ? (stackedResources ? 26 : 14) : 17
         let usageHeight = max(0, height - nameHeight - 2 - 16 - 4 - resourcesHeight - 3)
         let hasBoth = account.fiveHourWindow != nil && account.weeklyWindow != nil
         return VStack(spacing: 0) {
@@ -87,8 +90,14 @@ struct CodexUsageViewerWidgetContent: View {
             .frame(height: usageHeight)
             .padding(.top, 4)
 
-            WidgetResourceRow(items: account.widgetResources(at: referenceDate, short: isSmall),
-                              sizes: isSmall ? [10, 9, 8, 7, 6, 5] : [11, 10, 9, 8, 7], centered: isSmall)
+            VStack(spacing: 0) {
+                let rows = account.widgetResourceRows(at: referenceDate, short: isSmall, stacked: stackedResources)
+                ForEach(rows.indices, id: \.self) { index in
+                    WidgetResourceRow(items: rows[index],
+                                      sizes: isSmall ? [10, 9, 8, 7, 6, 5] : [11, 10, 9, 8, 7], centered: isSmall)
+                    .frame(height: isSmall ? (stackedResources ? 13 : 14) : 17)
+                }
+            }
             .frame(height: resourcesHeight)
             .padding(.top, 3)
         }
@@ -136,11 +145,11 @@ struct CodexUsageViewerWidgetContent: View {
         let label = session ? "5h" : "7d"
         let fullLabel = window?.label ?? "Usage"
         let showLabel = compact || session
-        let size: CGFloat = compact ? (narrowColumns ? 14 : 20) : (narrowColumns ? 24 : 30)
+        let size: CGFloat = compact ? (narrowColumns ? 14 : (stackedResources ? 16 : 20)) : (narrowColumns ? 24 : 30)
         let description = state.window.map { "\(fullLabel): \($0.remainingPercent) percent remaining" }
             ?? "\(fullLabel) usage unknown. \(state.status ?? "")"
         let resetDescription = reset.map { "Reset in \($0.countdown)" } ?? (state.status ?? "Reset time not reported")
-        return VStack(spacing: 2) {
+        return VStack(spacing: stackedResources ? 1 : 2) {
             Spacer(minLength: 0)
             HStack(alignment: .firstTextBaseline, spacing: 2) {
                 if showLabel {

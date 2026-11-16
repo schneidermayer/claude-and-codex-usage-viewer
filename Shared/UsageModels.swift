@@ -46,6 +46,8 @@ struct CreditBalance: Codable, Equatable, Sendable {
     var hasCredits: Bool
     var unlimited: Bool
     var balance: String?
+    /// ISO currency for monetary balances, in major units; absent for Codex credits.
+    var currency: String? = nil
 }
 
 /// Widget-safe summary; excludes redemption IDs.
@@ -85,11 +87,13 @@ struct RateLimitResetCredits: Codable, Equatable, Sendable {
 
 enum AccountResourceValue: Equatable, Sendable {
     case unknown, amount(String), available, unlimited
+    case currency(amount: String, code: String)
 
     var text: String {
         switch self {
         case .unknown: return "Unknown"
         case .amount(let value): return Self.decimal(value).map(Self.decimalText) ?? value
+        case .currency(let value, let code): return Self.currencyText(value, code: code)
         case .available: return "Available"
         case .unlimited: return "Unlimited"
         }
@@ -101,17 +105,41 @@ enum AccountResourceValue: Equatable, Sendable {
         case .available: return "Yes"
         case .unlimited: return "∞"
         case .amount(let value): return Self.compactAmount(value)
+        case .currency(let value, let code): return Self.currencyText(value, code: code, compact: true)
         }
     }
 
     /// A tighter balance for side-by-side resources in Small widget columns.
     /// Round down so shortening never promises more credit than was reported.
     var shortText: String {
+        if case .currency(let value, let code) = self { return Self.currencyText(value, code: code, compact: true, short: true) }
         guard case .amount(let value) = self else { return compactText }
         return Self.compactAmount(value, short: true)
     }
 
-    var accessibilityText: String { text }
+    var accessibilityText: String {
+        if case .currency(let value, let code) = self {
+            return "\(Self.decimal(value).map { NSDecimalNumber(decimal: $0).stringValue } ?? value) \(code)"
+        }
+        return text
+    }
+
+    private static func currencyText(_ value: String, code: String, compact: Bool = false, short: Bool = false) -> String {
+        guard let number = decimal(value) else { return "—" }
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.numberStyle = .currency
+        formatter.currencyCode = code
+        formatter.roundingMode = .down
+        if compact {
+            return formatter.positivePrefix + compactAmount(value, short: short) + formatter.positiveSuffix
+        }
+        // Never round a small positive balance up, or present it as depleted.
+        if number > 0, number < Decimal(string: "0.01")! {
+            return formatter.positivePrefix + "<0.01" + formatter.positiveSuffix
+        }
+        return formatter.string(from: NSDecimalNumber(decimal: number)) ?? "\(value) \(code)"
+    }
 
     fileprivate static func decimal(_ value: String) -> Decimal? {
         // Decimal accepts numeric prefixes; validate the whole string first.
@@ -258,6 +286,11 @@ struct AccountSnapshot: Codable, Equatable, Identifiable, Sendable {
 
     func creditsValue(at date: Date = .now) -> AccountResourceValue {
         guard isConnected, issue == nil, !isStale(at: date), let credits = primaryBucket?.credits else { return .unknown }
+        if provider == .claude {
+            guard let code = credits.currency, code.range(of: #"\A[A-Z]{3}\z"#, options: .regularExpression) != nil,
+                  let raw = credits.balance, let balance = AccountResourceValue.decimal(raw) else { return .unknown }
+            return .currency(amount: NSDecimalNumber(decimal: balance).stringValue, code: code)
+        }
         if credits.unlimited { return .unlimited }
         if !credits.hasCredits { return .amount("0") }
         guard let rawBalance = credits.balance else { return .available }
